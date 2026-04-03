@@ -13,7 +13,13 @@ const links = [
   { href: '/logs', label: 'Logs', icon: 'logs' },
 ] as const;
 
-type IconName = (typeof links)[number]['icon'] | 'logo' | 'logout' | 'search' | 'shield';
+type IconName =
+  | (typeof links)[number]['icon']
+  | 'logout'
+  | 'search'
+  | 'shield'
+  | 'paperclip'
+  | 'close';
 
 export function Icon({ name, className }: { name: IconName; className?: string }) {
   const size = 18;
@@ -28,13 +34,6 @@ export function Icon({ name, className }: { name: IconName; className?: string }
   };
 
   switch (name) {
-    case 'logo':
-      return (
-        <svg {...props}>
-          <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" stroke="currentColor" />
-          <circle cx="12" cy="12" r="4.5" stroke="currentColor" />
-        </svg>
-      );
     case 'inbox':
       return (
         <svg {...props}>
@@ -61,8 +60,8 @@ export function Icon({ name, className }: { name: IconName; className?: string }
     case 'settings':
       return (
         <svg {...props}>
-          <path d="M12 15.3a3.3 3.3 0 1 0 0-6.6 3.3 3.3 0 0 0 0 6.6Z" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M19.2 13.5a1.2 1.2 0 0 0 .24 1.33l.03.03a1.45 1.45 0 1 1-2.06 2.05l-.03-.03a1.2 1.2 0 0 0-1.35-.24 1.2 1.2 0 0 0-.73 1.1V18a1.45 1.45 0 0 1-2.9 0v-.04a1.2 1.2 0 0 0-.79-1.12 1.2 1.2 0 0 0-1.34.24l-.03.03a1.45 1.45 0 1 1-2.05-2.05l.03-.03a1.2 1.2 0 0 0 .24-1.35 1.2 1.2 0 0 0-1.1-.73H6a1.45 1.45 0 0 1 0-2.9h.04a1.2 1.2 0 0 0 1.12-.79 1.2 1.2 0 0 0-.24-1.34l-.03-.03A1.45 1.45 0 1 1 8.94 4l.03.03a1.2 1.2 0 0 0 1.35.24h.06a1.2 1.2 0 0 0 .73-1.1V3a1.45 1.45 0 0 1 2.9 0v.04a1.2 1.2 0 0 0 .79 1.12h.06a1.2 1.2 0 0 0 1.34-.24l.03-.03A1.45 1.45 0 1 1 18.28 6l-.03.03a1.2 1.2 0 0 0-.24 1.35v.06a1.2 1.2 0 0 0 1.1.73H19a1.45 1.45 0 0 1 0 2.9h-.04a1.2 1.2 0 0 0-1.12.79v.06Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" stroke="currentColor" strokeWidth="1.9" />
+          <path d="M12 3.5v2M12 18.5v2M4.5 12h2M17.5 12h2M6.7 6.7l1.4 1.4M15.9 15.9l1.4 1.4M17.3 6.7l-1.4 1.4M8.1 15.9l-1.4 1.4" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
         </svg>
       );
     case 'logs':
@@ -94,6 +93,18 @@ export function Icon({ name, className }: { name: IconName; className?: string }
           <path d="M12 3.7 5.8 6.1v5.5c0 4.2 2.7 7.2 6.2 8.7 3.5-1.5 6.2-4.5 6.2-8.7V6.1L12 3.7Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
         </svg>
       );
+    case 'paperclip':
+      return (
+        <svg {...props}>
+          <path d="M9.2 12.4 14.9 6.7a3.2 3.2 0 0 1 4.5 4.5l-7.8 7.8a5.1 5.1 0 0 1-7.2-7.2l8.1-8.1" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'close':
+      return (
+        <svg {...props}>
+          <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+        </svg>
+      );
     default:
       return null;
   }
@@ -120,12 +131,8 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="shell page">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-icon">
-            <Icon name="logo" />
-          </div>
           <div>
-            <div className="brand-title">Telegram Bot</div>
-            <div className="brand-subtitle">Admin Panel</div>
+            <div className="brand-title">Telegram Bot Admin Panel</div>
           </div>
         </div>
         <nav className="nav-list">

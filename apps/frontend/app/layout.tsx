@@ -2,7 +2,7 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Opener Bot Admin',
+  title: 'Telegram Bot Admin Panel',
   description: 'Self-hosted Telegram bot operator panel',
 };
 

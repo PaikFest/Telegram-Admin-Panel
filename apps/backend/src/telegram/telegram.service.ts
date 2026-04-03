@@ -157,6 +157,51 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async resolveUserByUsername(username: string): Promise<{
+    telegramId: string;
+    username: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    languageCode: string | null;
+  } | null> {
+    if (!this.bot) {
+      return null;
+    }
+
+    const normalizedUsername = username.replace(/^@+/, '');
+    if (!normalizedUsername) {
+      return null;
+    }
+
+    try {
+      const chat = await this.bot.getChat(`@${normalizedUsername}`);
+      const chatData = chat as TelegramBot.Chat & {
+        first_name?: string;
+        last_name?: string;
+        username?: string;
+        language_code?: string;
+      };
+
+      return {
+        telegramId: String(chat.id),
+        username: sanitizeOptionalPlainText(chatData.username ?? normalizedUsername),
+        firstName: sanitizeOptionalPlainText(chatData.first_name),
+        lastName: sanitizeOptionalPlainText(chatData.last_name),
+        languageCode: sanitizeOptionalPlainText(chatData.language_code),
+      };
+    } catch (error) {
+      await this.logsService.warn(
+        'telegram',
+        'Failed to resolve Telegram username',
+        {
+          username: normalizedUsername,
+          error: String(error),
+        } as Prisma.InputJsonValue,
+      );
+      return null;
+    }
+  }
+
   private async handleIncomingMessage(message: Message): Promise<void> {
     if (!message.from || message.from.is_bot) {
       return;

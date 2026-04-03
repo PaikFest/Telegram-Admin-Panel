@@ -43,10 +43,9 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [search, setSearch] = useState('');
   const [replyText, setReplyText] = useState('');
-  const [mediaCaption, setMediaCaption] = useState('');
+  const [attachmentCaption, setAttachmentCaption] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
-  const [sendingMedia, setSendingMedia] = useState(false);
   const [fetchingConversations, setFetchingConversations] = useState(false);
   const [fetchingMessages, setFetchingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -140,84 +139,74 @@ export default function InboxPage() {
     [conversations, selectedUserId],
   );
 
-  const sendReply = async (event: FormEvent) => {
+  const clearAttachment = () => {
+    setSelectedFile(null);
+    setAttachmentCaption('');
+  };
+
+  const sendComposer = async (event: FormEvent) => {
     event.preventDefault();
-    if (!selectedUserId || !replyText.trim()) return;
+    if (!selectedUserId) return;
+    if (!selectedFile && !replyText.trim()) return;
 
     setSending(true);
     setError(null);
     setSuccess(null);
 
     try {
-      const result = await apiFetch<{ success: true; outboxId: number }>(
-        `/api/inbox/conversations/${selectedUserId}/reply`,
-        {
-          method: 'POST',
-          body: JSON.stringify({ text: replyText }),
-        },
-      );
+      if (selectedFile) {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
 
-      if (typeof result.outboxId !== 'number') {
-        setError('Failed to queue reply');
-        return;
+        const resolvedCaption =
+          attachmentCaption.trim() || replyText.trim() || '';
+        if (resolvedCaption) {
+          formData.append('caption', resolvedCaption);
+        }
+
+        const response = await fetch(withAdminBasePath(`/api/inbox/conversations/${selectedUserId}/reply-media`), {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        });
+
+        if (!response.ok) {
+          let errorMessage = `Request failed with status ${response.status}`;
+          try {
+            const payload = (await response.json()) as { message?: string | string[] };
+            if (Array.isArray(payload.message)) {
+              errorMessage = payload.message.join(', ');
+            } else if (typeof payload.message === 'string') {
+              errorMessage = payload.message;
+            }
+          } catch {
+            // keep fallback
+          }
+          throw new Error(errorMessage);
+        }
+
+        clearAttachment();
+      } else {
+        const result = await apiFetch<{ success: true; outboxId: number }>(
+          `/api/inbox/conversations/${selectedUserId}/reply`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ text: replyText }),
+          },
+        );
+        if (typeof result.outboxId !== 'number') {
+          throw new Error('Failed to queue reply');
+        }
       }
 
       setReplyText('');
-      setSuccess('Reply queued');
+      setSuccess('Message queued');
       await fetchConversations();
       await fetchMessages(selectedUserId);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
     } finally {
       setSending(false);
-    }
-  };
-
-  const sendMediaReply = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!selectedUserId || !selectedFile) return;
-
-    setSendingMedia(true);
-    setError(null);
-    setSuccess(null);
-
-    try {
-      const formData = new FormData();
-      formData.append('file', selectedFile);
-      if (mediaCaption.trim()) {
-        formData.append('caption', mediaCaption.trim());
-      }
-
-      const response = await fetch(withAdminBasePath(`/api/inbox/conversations/${selectedUserId}/reply-media`), {
-        method: 'POST',
-        body: formData,
-        credentials: 'include',
-      });
-
-      if (!response.ok) {
-        let errorMessage = `Request failed with status ${response.status}`;
-        try {
-          const payload = (await response.json()) as { message?: string | string[] };
-          if (Array.isArray(payload.message)) {
-            errorMessage = payload.message.join(', ');
-          } else if (typeof payload.message === 'string') {
-            errorMessage = payload.message;
-          }
-        } catch {
-          // keep default error message
-        }
-        throw new Error(errorMessage);
-      }
-
-      setSelectedFile(null);
-      setMediaCaption('');
-      setSuccess('Image reply queued');
-      await fetchConversations();
-      await fetchMessages(selectedUserId);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send image');
-    } finally {
-      setSendingMedia(false);
     }
   };
 
@@ -359,56 +348,51 @@ export default function InboxPage() {
             </div>
 
             <div className="composer">
-              <form onSubmit={sendReply}>
+              <form onSubmit={sendComposer}>
                 <div className="composer-grid">
+                  <label className="attach-button">
+                    <Icon name="paperclip" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                      disabled={!selectedUserId || sending}
+                    />
+                  </label>
                   <textarea
                     placeholder="Type your message..."
                     value={replyText}
                     onChange={(event) => setReplyText(event.target.value)}
                     maxLength={4000}
-                    disabled={!selectedUserId}
+                    disabled={!selectedUserId || sending}
                   />
                   <button
                     className="button-primary"
                     style={{ minWidth: 106, height: '100%' }}
                     type="submit"
-                    disabled={!selectedUserId || sending || !replyText.trim()}
+                    disabled={!selectedUserId || sending || (!replyText.trim() && !selectedFile)}
                   >
                     {sending ? 'Sending...' : 'Send'}
                   </button>
                 </div>
-              </form>
 
-              <form onSubmit={sendMediaReply}>
-                <div className="composer-actions">
-                  <div className="file-inline">
-                    <label className="button-secondary file-input" style={{ cursor: selectedUserId ? 'pointer' : 'not-allowed', opacity: selectedUserId ? 1 : 0.6 }}>
-                      Choose image
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-                        disabled={!selectedUserId}
-                      />
-                    </label>
-                    <span className="subtle">
-                      {selectedFile ? selectedFile.name : 'No image selected'}
-                    </span>
-                  </div>
-                  <div className="button-row">
+                {selectedFile ? (
+                  <div className="attachment-pill">
+                    <div className="attachment-head">
+                      <span>{selectedFile.name}</span>
+                      <button type="button" className="attachment-remove" onClick={clearAttachment}>
+                        <Icon name="close" />
+                      </button>
+                    </div>
                     <input
-                      placeholder="Caption (optional)"
-                      value={mediaCaption}
-                      onChange={(event) => setMediaCaption(event.target.value)}
+                      placeholder="Add image caption (optional)"
+                      value={attachmentCaption}
+                      onChange={(event) => setAttachmentCaption(event.target.value)}
                       maxLength={1024}
-                      disabled={!selectedUserId}
-                      style={{ width: 260 }}
+                      disabled={sending}
                     />
-                    <button className="button-secondary" type="submit" disabled={!selectedUserId || sendingMedia || !selectedFile}>
-                      {sendingMedia ? 'Uploading...' : 'Send Image'}
-                    </button>
                   </div>
-                </div>
+                ) : null}
               </form>
             </div>
           </section>

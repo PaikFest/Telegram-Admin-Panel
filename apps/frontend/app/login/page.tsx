@@ -65,7 +65,7 @@ export default function LoginPage() {
   return (
     <div className="auth-wrap">
       <form className="panel auth-card" onSubmit={onSubmit}>
-        <h1 className="auth-title">Telegram Bot</h1>
+        <h1 className="auth-title">Telegram Bot Admin Panel</h1>
         <p className="auth-subtitle">Private operator access to your admin workspace</p>
 
         <label className="field-label" htmlFor="login">

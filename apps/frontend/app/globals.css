@@ -89,27 +89,15 @@ a:focus-visible,
 }
 
 .brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+  display: block;
   padding: 0 12px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.045);
 }
 
-.brand-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  background: #073449;
-  color: var(--accent);
-  display: grid;
-  place-items: center;
-}
-
 .brand-title {
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
-  line-height: 1.1;
+  line-height: 1.25;
   letter-spacing: -0.01em;
 }
 
@@ -132,7 +120,7 @@ a:focus-visible,
   padding: 11px 12px;
   border-radius: 11px;
   color: var(--text-2);
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 500;
   border: 1px solid transparent;
 }
@@ -170,7 +158,7 @@ a:focus-visible,
   padding: 11px 12px;
   background: transparent;
   color: var(--text-2);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 500;
   cursor: pointer;
 }
@@ -236,7 +224,7 @@ a:focus-visible,
 
 .panel-title {
   margin: 0 0 12px;
-  font-size: 32px;
+  font-size: 28px;
   letter-spacing: -0.01em;
 }
 
@@ -741,12 +729,73 @@ button:disabled,
 
 .composer-grid {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   gap: 10px;
+  align-items: stretch;
 }
 
 .composer textarea {
   min-height: 92px;
+}
+
+.attach-button {
+  position: relative;
+  width: 46px;
+  border-radius: 12px;
+  border: 1px solid #243248;
+  background: #151f2e;
+  color: #b9c8e0;
+  display: grid;
+  place-items: center;
+}
+
+.attach-button:hover:not(:disabled) {
+  border-color: rgba(0, 194, 230, 0.42);
+  color: #d8f8ff;
+  background: rgba(0, 194, 230, 0.13);
+}
+
+.attach-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.attachment-pill {
+  margin-top: 10px;
+  border: 1px solid #2a3a53;
+  border-radius: 12px;
+  background: #141d2c;
+  padding: 10px 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.attachment-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #d6e3f8;
+  font-size: 14px;
+}
+
+.attachment-remove {
+  border: 0;
+  background: transparent;
+  color: #a7b7d2;
+  padding: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+}
+
+.attachment-remove:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #f2f6ff;
 }
 
 .composer-actions {
@@ -823,6 +872,33 @@ button:disabled,
   display: flex;
   align-items: flex-start;
   gap: 10px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 6, 12, 0.74);
+  backdrop-filter: blur(2px);
+  z-index: 45;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.modal-card {
+  width: min(560px, 100%);
+}
+
+.modal-title {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+}
+
+.modal-subtitle {
+  margin: 6px 0 0;
+  color: var(--text-2);
+  font-size: 14px;
 }
 
 .notice-title {
