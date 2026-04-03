@@ -6,8 +6,8 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-APP_DIR="/opt/opener-bot-admin"
-REPO_URL="${REPO_URL:-https://github.com/USER/REPO.git}"
+APP_DIR="/opt/Telegram-AdminBot-Panel"
+REPO_URL="${REPO_URL:-https://github.com/PaikFest/Telegram-Admin-Panel}"
 
 if [ -z "${BOT_TOKEN:-}" ]; then
   read -r -p "Enter BOT_TOKEN: " BOT_TOKEN
