@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell, Icon } from '../../components/AppShell';
 import { apiFetch, formatDate, withAdminBasePath } from '../../lib/api';
 import { useAuth } from '../../lib/useAuth';
@@ -36,20 +36,63 @@ type ChatMessage = {
   createdAt: string;
 };
 
+type AttachmentItem = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
+function createAttachmentId(file: File): string {
+  return `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`;
+}
+
 export default function InboxPage() {
   const { loading } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [search, setSearch] = useState('');
   const [replyText, setReplyText] = useState('');
   const [attachmentCaption, setAttachmentCaption] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
+  const [draggingAttachmentId, setDraggingAttachmentId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [fetchingConversations, setFetchingConversations] = useState(false);
   const [fetchingMessages, setFetchingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+
+  const resetFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const revokeAttachmentPreview = (attachment: AttachmentItem) => {
+    if (attachment.previewUrl) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+  };
+
+  const clearAttachments = useCallback(() => {
+    setAttachments((previous) => {
+      previous.forEach(revokeAttachmentPreview);
+      return [];
+    });
+    setAttachmentCaption('');
+    setDraggingAttachmentId(null);
+    resetFileInput();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      setAttachments((previous) => {
+        previous.forEach(revokeAttachmentPreview);
+        return previous;
+      });
+    };
+  }, []);
 
   const fetchConversations = useCallback(async () => {
     const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
@@ -139,29 +182,82 @@ export default function InboxPage() {
     [conversations, selectedUserId],
   );
 
-  const clearAttachment = () => {
-    setSelectedFile(null);
-    setAttachmentCaption('');
+  const removeAttachment = (id: string) => {
+    setAttachments((previous) => {
+      const target = previous.find((attachment) => attachment.id === id);
+      if (target) {
+        revokeAttachmentPreview(target);
+      }
+      return previous.filter((attachment) => attachment.id !== id);
+    });
+    resetFileInput();
+  };
+
+  const onFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) {
+      resetFileInput();
+      return;
+    }
+
+    const next = Array.from(files).map<AttachmentItem>((file) => ({
+      id: createAttachmentId(file),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+
+    setAttachments((previous) => [...previous, ...next]);
+    resetFileInput();
+  };
+
+  const onDragStartAttachment = (attachmentId: string) => {
+    setDraggingAttachmentId(attachmentId);
+  };
+
+  const onDropAttachment = (targetAttachmentId: string) => {
+    if (!draggingAttachmentId || draggingAttachmentId === targetAttachmentId) {
+      setDraggingAttachmentId(null);
+      return;
+    }
+
+    setAttachments((previous) => {
+      const fromIndex = previous.findIndex((item) => item.id === draggingAttachmentId);
+      const toIndex = previous.findIndex((item) => item.id === targetAttachmentId);
+      if (fromIndex < 0 || toIndex < 0) {
+        return previous;
+      }
+
+      const next = [...previous];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+
+    setDraggingAttachmentId(null);
   };
 
   const sendComposer = async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedUserId) return;
-    if (!selectedFile && !replyText.trim()) return;
+
+    const hasText = replyText.trim().length > 0;
+    const hasAttachments = attachments.length > 0;
+    if (!hasText && !hasAttachments) return;
 
     setSending(true);
     setError(null);
     setSuccess(null);
 
     try {
-      if (selectedFile) {
+      if (hasAttachments) {
         const formData = new FormData();
-        formData.append('file', selectedFile);
+        for (const attachment of attachments) {
+          formData.append('files', attachment.file);
+        }
 
-        const resolvedCaption =
-          attachmentCaption.trim() || replyText.trim() || '';
-        if (resolvedCaption) {
-          formData.append('caption', resolvedCaption);
+        const caption = attachmentCaption.trim();
+        if (caption.length > 0) {
+          formData.append('caption', caption);
         }
 
         const response = await fetch(withAdminBasePath(`/api/inbox/conversations/${selectedUserId}/reply-media`), {
@@ -184,9 +280,9 @@ export default function InboxPage() {
           }
           throw new Error(errorMessage);
         }
+      }
 
-        clearAttachment();
-      } else {
+      if (hasText) {
         const result = await apiFetch<{ success: true; outboxId: number }>(
           `/api/inbox/conversations/${selectedUserId}/reply`,
           {
@@ -194,11 +290,13 @@ export default function InboxPage() {
             body: JSON.stringify({ text: replyText }),
           },
         );
+
         if (typeof result.outboxId !== 'number') {
           throw new Error('Failed to queue reply');
         }
       }
 
+      clearAttachments();
       setReplyText('');
       setSuccess('Message queued');
       await fetchConversations();
@@ -264,7 +362,9 @@ export default function InboxPage() {
                         ID: {conversation.user.telegramId}
                         {'  '}
                         {conversation.user.isBlocked ? (
-                          <span className="badge badge-danger" style={{ marginLeft: 6 }}>Blocked</span>
+                          <span className="badge badge-danger" style={{ marginLeft: 6 }}>
+                            Blocked
+                          </span>
                         ) : null}
                       </div>
                       <div className="conversation-top" style={{ marginTop: 8 }}>
@@ -299,9 +399,7 @@ export default function InboxPage() {
               ) : (
                 <div className="subtle">Select a conversation to begin.</div>
               )}
-              {selectedConversation?.user.isBlocked ? (
-                <span className="badge badge-danger">Blocked</span>
-              ) : null}
+              {selectedConversation?.user.isBlocked ? <span className="badge badge-danger">Blocked</span> : null}
             </header>
 
             <div className="messages">
@@ -353,9 +451,11 @@ export default function InboxPage() {
                   <label className="attach-button">
                     <Icon name="paperclip" />
                     <input
+                      ref={fileInputRef}
                       type="file"
                       accept="image/*"
-                      onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+                      multiple
+                      onChange={onFileSelect}
                       disabled={!selectedUserId || sending}
                     />
                   </label>
@@ -370,22 +470,41 @@ export default function InboxPage() {
                     className="button-primary"
                     style={{ minWidth: 106, height: '100%' }}
                     type="submit"
-                    disabled={!selectedUserId || sending || (!replyText.trim() && !selectedFile)}
+                    disabled={!selectedUserId || sending || (!replyText.trim() && attachments.length === 0)}
                   >
                     {sending ? 'Sending...' : 'Send'}
                   </button>
                 </div>
 
-                {selectedFile ? (
-                  <div className="attachment-pill">
-                    <div className="attachment-head">
-                      <span>{selectedFile.name}</span>
-                      <button type="button" className="attachment-remove" onClick={clearAttachment}>
-                        <Icon name="close" />
-                      </button>
+                {attachments.length > 0 ? (
+                  <div className="attachment-tray">
+                    <div className="attachment-grid">
+                      {attachments.map((attachment) => (
+                        <div
+                          key={attachment.id}
+                          className={`attachment-tile ${draggingAttachmentId === attachment.id ? 'dragging' : ''}`}
+                          draggable
+                          onDragStart={() => onDragStartAttachment(attachment.id)}
+                          onDragEnd={() => setDraggingAttachmentId(null)}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={() => onDropAttachment(attachment.id)}
+                        >
+                          <img src={attachment.previewUrl} alt={attachment.file.name} className="attachment-thumb" />
+                          <button
+                            type="button"
+                            className="attachment-remove attachment-remove-floating"
+                            onClick={() => removeAttachment(attachment.id)}
+                          >
+                            <Icon name="close" />
+                          </button>
+                          <div className="attachment-name" title={attachment.file.name}>
+                            {attachment.file.name}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                     <input
-                      placeholder="Add image caption (optional)"
+                      placeholder="Caption for attachments (optional)"
                       value={attachmentCaption}
                       onChange={(event) => setAttachmentCaption(event.target.value)}
                       maxLength={1024}

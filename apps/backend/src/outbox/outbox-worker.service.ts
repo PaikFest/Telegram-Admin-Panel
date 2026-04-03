@@ -180,7 +180,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
           SELECT "id"
           FROM "outbox"
           WHERE "status" = 'PENDING'
-          ORDER BY "created_at" ASC
+          ORDER BY "created_at" ASC, "id" ASC
           LIMIT ${OUTBOX_BATCH_SIZE}
           FOR UPDATE SKIP LOCKED
         )

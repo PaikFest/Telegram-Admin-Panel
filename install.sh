@@ -10,11 +10,11 @@ APP_DIR="/opt/Telegram-AdminBot-Panel"
 REPO_URL="${REPO_URL:-https://github.com/PaikFest/Telegram-Admin-Panel.git}"
 
 if [ -z "${BOT_TOKEN:-}" ]; then
-  read -r -p "Enter BOT_TOKEN: " BOT_TOKEN
+  read -r -p "Enter BOT_TOKEN:" BOT_TOKEN
 fi
 
 if [ -z "$BOT_TOKEN" ]; then
-  echo "BOT_TOKEN is required"
+  echo "BOT_TOKEN is required and cannot be empty"
   exit 1
 fi
 

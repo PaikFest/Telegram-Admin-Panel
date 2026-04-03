@@ -24,6 +24,7 @@ export type TelegramSendResult =
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private bot: TelegramBot | null = null;
   private botToken: string | null = null;
+  private botDisplayName: string | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -58,6 +59,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       } as Prisma.InputJsonValue);
     });
 
+    await this.refreshBotProfile();
     await this.bot.startPolling();
     await this.logsService.info('telegram', 'Long polling started');
   }
@@ -157,6 +159,15 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  async getBotDisplayName(): Promise<string | null> {
+    if (this.botDisplayName) {
+      return this.botDisplayName;
+    }
+
+    await this.refreshBotProfile();
+    return this.botDisplayName;
+  }
+
   async resolveUserByUsername(username: string): Promise<{
     telegramId: string;
     username: string | null;
@@ -253,6 +264,33 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       await this.logsService.error(
         'telegram',
         'Failed to process incoming message',
+        { error: String(error) } as Prisma.InputJsonValue,
+      );
+    }
+  }
+
+  private async refreshBotProfile(): Promise<void> {
+    if (!this.bot) {
+      this.botDisplayName = null;
+      return;
+    }
+
+    try {
+      const me = await this.bot.getMe();
+      const firstName = sanitizeOptionalPlainText(me.first_name);
+      const username = sanitizeOptionalPlainText(me.username);
+
+      if (firstName && username) {
+        this.botDisplayName = `${firstName} (@${username.replace(/^@+/, '')})`;
+        return;
+      }
+
+      this.botDisplayName = firstName ?? (username ? `@${username.replace(/^@+/, '')}` : null);
+    } catch (error) {
+      this.botDisplayName = null;
+      await this.logsService.warn(
+        'telegram',
+        'Failed to load bot profile',
         { error: String(error) } as Prisma.InputJsonValue,
       );
     }

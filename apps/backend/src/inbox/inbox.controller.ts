@@ -7,11 +7,11 @@ import {
   ParseIntPipe,
   Post,
   Query,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { mkdirSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
@@ -24,7 +24,7 @@ import { InboxService } from './inbox.service';
 const UPLOADS_DIR = resolve(process.cwd(), 'storage', 'uploads');
 mkdirSync(UPLOADS_DIR, { recursive: true });
 
-const imageUploadInterceptor = FileInterceptor('file', {
+const imageUploadInterceptor = FilesInterceptor('files', 10, {
   storage: diskStorage({
     destination: (
       _req: Request,
@@ -44,6 +44,7 @@ const imageUploadInterceptor = FileInterceptor('file', {
   }),
   limits: {
     fileSize: 10 * 1024 * 1024,
+    files: 10,
   },
   fileFilter: (
     _req: Request,
@@ -85,9 +86,10 @@ export class InboxController {
   @UseInterceptors(imageUploadInterceptor)
   async sendReplyMedia(
     @Param('userId', ParseIntPipe) userId: number,
-    @UploadedFile() file: { path: string; mimetype: string; originalname: string } | undefined,
+    @UploadedFiles()
+    files: Array<{ path: string; mimetype: string; originalname: string }> | undefined,
     @Body('caption') caption?: string,
   ) {
-    return this.inboxService.sendReplyMedia(userId, file ?? null, caption);
+    return this.inboxService.sendReplyMedia(userId, files ?? [], caption);
   }
 }

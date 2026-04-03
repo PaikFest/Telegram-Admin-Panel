@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { apiFetch } from '../lib/api';
 
 const links = [
@@ -114,6 +114,34 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
+  const [botDisplayName, setBotDisplayName] = useState('Telegram Bot Admin Panel');
+
+  useEffect(() => {
+    let active = true;
+
+    const loadBotName = async () => {
+      try {
+        const me = await apiFetch<{
+          id: number;
+          login: string;
+          botDisplayName?: string | null;
+        }>('/api/auth/me');
+
+        if (!active) return;
+
+        const normalized = typeof me.botDisplayName === 'string' ? me.botDisplayName.trim() : '';
+        setBotDisplayName(normalized.length > 0 ? normalized : 'Telegram Bot Admin Panel');
+      } catch {
+        if (!active) return;
+        setBotDisplayName('Telegram Bot Admin Panel');
+      }
+    };
+
+    void loadBotName();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const logout = async () => {
     setLoggingOut(true);
@@ -132,7 +160,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="sidebar">
         <div className="brand">
           <div>
-            <div className="brand-title">Telegram Bot Admin Panel</div>
+            <div className="brand-title">{botDisplayName}</div>
           </div>
         </div>
         <nav className="nav-list">

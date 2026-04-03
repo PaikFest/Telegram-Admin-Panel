@@ -157,15 +157,15 @@ export class InboxService {
 
   async sendReplyMedia(
     userId: number,
-    file: {
+    files: Array<{
       path: string;
       mimetype: string;
       originalname: string;
-    } | null,
+    }>,
     caption?: string,
-  ): Promise<{ success: boolean; outboxId: number }> {
-    if (!file) {
-      throw new BadRequestException('Image file is required');
+  ): Promise<{ success: boolean; outboxIds: number[] }> {
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new BadRequestException('At least one image file is required');
     }
 
     const normalizedCaption = sanitizeOptionalPlainText(caption);
@@ -187,31 +187,41 @@ export class InboxService {
       throw new NotFoundException('User not found');
     }
 
-    const job = await this.prisma.outbox.create({
-      data: {
-        userId,
-        sourceType: OutboxSourceType.REPLY,
-        messageType: MessageType.PHOTO,
-        text: null,
-        caption: normalizedCaption,
-        filePath: file.path,
-        mimeType: sanitizeOptionalPlainText(file.mimetype),
-        originalFileName: sanitizeOptionalPlainText(file.originalname),
-      },
-      select: {
-        id: true,
-      },
+    const jobs = await this.prisma.$transaction(async (tx) => {
+      const created: number[] = [];
+
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        const job = await tx.outbox.create({
+          data: {
+            userId,
+            sourceType: OutboxSourceType.REPLY,
+            messageType: MessageType.PHOTO,
+            text: null,
+            caption: index === 0 ? normalizedCaption : null,
+            filePath: file.path,
+            mimeType: sanitizeOptionalPlainText(file.mimetype),
+            originalFileName: sanitizeOptionalPlainText(file.originalname),
+          },
+          select: {
+            id: true,
+          },
+        });
+        created.push(job.id);
+      }
+
+      return created;
     });
 
     await this.logsService.info(
       'outbox',
-      `Photo reply queued for userId=${userId}`,
+      `Photo reply queued for userId=${userId}, files=${files.length}`,
       {
-        outboxId: job.id,
+        outboxIds: jobs,
       } as Prisma.InputJsonValue,
     );
 
-    return { success: true, outboxId: job.id };
+    return { success: true, outboxIds: jobs };
   }
 
   private buildSearchWhere(search?: string): Prisma.UserWhereInput {

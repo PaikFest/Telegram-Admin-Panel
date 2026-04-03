@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { LogsService } from '../logs/logs.service';
+import { TelegramService } from '../telegram/telegram.service';
 import { AuthService } from './auth.service';
 import { ChangeCredentialsDto } from './dto/change-credentials.dto';
 import { LoginDto } from './dto/login.dto';
@@ -20,6 +21,7 @@ export class AuthController {
   constructor(
     private readonly authService: AuthService,
     private readonly logsService: LogsService,
+    private readonly telegramService: TelegramService,
   ) {}
 
   @Post('login')
@@ -66,7 +68,9 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(AuthenticatedGuard)
-  async me(@Req() req: Request): Promise<{ id: number; login: string }> {
+  async me(
+    @Req() req: Request,
+  ): Promise<{ id: number; login: string; botDisplayName: string | null }> {
     const adminId = req.session.adminId;
     if (!adminId) {
       throw new UnauthorizedException('Unauthorized');
@@ -77,7 +81,8 @@ export class AuthController {
       throw new UnauthorizedException('Unauthorized');
     }
 
-    return admin;
+    const botDisplayName = await this.telegramService.getBotDisplayName();
+    return { ...admin, botDisplayName };
   }
 
   @Post('change-credentials')
