@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AppShell } from '../../components/AppShell';
+import { AppShell, Icon } from '../../components/AppShell';
 import { apiFetch, formatDate } from '../../lib/api';
 import { useAuth } from '../../lib/useAuth';
 
@@ -23,11 +23,14 @@ export default function UsersPage() {
   const [search, setSearch] = useState('');
   const [users, setUsers] = useState<UserItem[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [fetching, setFetching] = useState(false);
 
   useEffect(() => {
     if (loading) return;
 
     let active = true;
+    setFetching(true);
+
     const run = async () => {
       try {
         const query = search.trim() ? `?search=${encodeURIComponent(search.trim())}` : '';
@@ -39,6 +42,10 @@ export default function UsersPage() {
       } catch (err) {
         if (active) {
           setError(err instanceof Error ? err.message : 'Failed to load users');
+        }
+      } finally {
+        if (active) {
+          setFetching(false);
         }
       }
     };
@@ -55,45 +62,89 @@ export default function UsersPage() {
 
   return (
     <AppShell>
-      <h2>Users</h2>
-      <div className="row" style={{ marginBottom: 12 }}>
-        <input
-          placeholder="Search by username or telegramId"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-        />
+      <div className="workspace">
+        <header className="page-head">
+          <div>
+            <h1 className="page-title">Users</h1>
+            <p className="page-subtitle">Manage Telegram bot users</p>
+          </div>
+          <div className="meta-note">Total: {users.length} users</div>
+        </header>
+
+        <section className="panel panel-body">
+          <div className="search-wrap">
+            <Icon name="search" />
+            <input
+              placeholder="Search by name, username, or Telegram ID..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </div>
+        </section>
+
+        {error ? (
+          <div className="toast error" style={{ position: 'relative', right: 'unset', bottom: 'unset' }}>
+            {error}
+          </div>
+        ) : null}
+
+        <section className="panel table-shell">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Telegram ID</th>
+                <th>Username</th>
+                <th>Name</th>
+                <th>Language</th>
+                <th>Status</th>
+                <th>Last Seen</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {fetching ? (
+                Array.from({ length: 6 }).map((_, idx) => (
+                  <tr key={`skeleton-${idx}`}>
+                    {Array.from({ length: 8 }).map((__, colIdx) => (
+                      <td key={`skeleton-${idx}-${colIdx}`}>
+                        <div className="skeleton-line" />
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              ) : users.length === 0 ? (
+                <tr>
+                  <td colSpan={8}>
+                    <div className="empty-state">No users found for this query.</div>
+                  </td>
+                </tr>
+              ) : (
+                users.map((user) => (
+                  <tr key={user.id}>
+                    <td>{user.id}</td>
+                    <td className="mono">{user.telegramId}</td>
+                    <td>{user.username ? `@${user.username.replace(/^@/, '')}` : '—'}</td>
+                    <td>{`${user.firstName || ''} ${user.lastName || ''}`.trim() || '—'}</td>
+                    <td>
+                      <span className="badge badge-muted">{(user.languageCode || '—').toUpperCase()}</span>
+                    </td>
+                    <td>
+                      {user.isBlocked ? (
+                        <span className="badge badge-danger">Blocked</span>
+                      ) : (
+                        <span className="badge badge-success">Active</span>
+                      )}
+                    </td>
+                    <td>{formatDate(user.lastSeenAt)}</td>
+                    <td>{formatDate(user.createdAt)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </section>
       </div>
-
-      {error && <p className="error">{error}</p>}
-
-      <table className="table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th>Telegram ID</th>
-            <th>Username</th>
-            <th>Name</th>
-            <th>Language</th>
-            <th>Blocked</th>
-            <th>Last Seen</th>
-            <th>Created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((user) => (
-            <tr key={user.id}>
-              <td>{user.id}</td>
-              <td>{user.telegramId}</td>
-              <td>{user.username || '-'}</td>
-              <td>{`${user.firstName || ''} ${user.lastName || ''}`.trim() || '-'}</td>
-              <td>{user.languageCode || '-'}</td>
-              <td>{user.isBlocked ? 'yes' : 'no'}</td>
-              <td>{formatDate(user.lastSeenAt)}</td>
-              <td>{formatDate(user.createdAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </AppShell>
   );
 }

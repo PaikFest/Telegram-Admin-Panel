@@ -6,12 +6,98 @@ import { ReactNode, useState } from 'react';
 import { apiFetch } from '../lib/api';
 
 const links = [
-  { href: '/inbox', label: 'Inbox' },
-  { href: '/users', label: 'Users' },
-  { href: '/broadcasts', label: 'Broadcasts' },
-  { href: '/settings', label: 'Settings' },
-  { href: '/logs', label: 'Logs' },
-];
+  { href: '/inbox', label: 'Inbox', icon: 'inbox' },
+  { href: '/users', label: 'Users', icon: 'users' },
+  { href: '/broadcasts', label: 'Broadcasts', icon: 'broadcasts' },
+  { href: '/settings', label: 'Settings', icon: 'settings' },
+  { href: '/logs', label: 'Logs', icon: 'logs' },
+] as const;
+
+type IconName = (typeof links)[number]['icon'] | 'logo' | 'logout' | 'search' | 'shield';
+
+export function Icon({ name, className }: { name: IconName; className?: string }) {
+  const size = 18;
+  const props = {
+    width: size,
+    height: size,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    xmlns: 'http://www.w3.org/2000/svg',
+    className,
+    'aria-hidden': true,
+  };
+
+  switch (name) {
+    case 'logo':
+      return (
+        <svg {...props}>
+          <rect x="3.5" y="3.5" width="17" height="17" rx="4.5" stroke="currentColor" />
+          <circle cx="12" cy="12" r="4.5" stroke="currentColor" />
+        </svg>
+      );
+    case 'inbox':
+      return (
+        <svg {...props}>
+          <path d="M4 12.5L6.3 6.6A2 2 0 0 1 8.16 5.3h7.68a2 2 0 0 1 1.86 1.3L20 12.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M20 12.5V16a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-3.5h4.1a2 2 0 0 0 1.7.95h4.4a2 2 0 0 0 1.7-.95H20Z" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'users':
+      return (
+        <svg {...props}>
+          <path d="M15.5 19.3v-1a3.5 3.5 0 0 0-3.5-3.5h-5a3.5 3.5 0 0 0-3.5 3.5v1" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <circle cx="9.5" cy="8.6" r="3.2" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M20 19.3v-1.2a3 3 0 0 0-2.3-2.9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M17.6 5.8a3 3 0 0 1 0 5.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case 'broadcasts':
+      return (
+        <svg {...props}>
+          <path d="M21 3L11.7 12.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M21 3l-6.5 18-2.8-8.7L3 9.5 21 3Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'settings':
+      return (
+        <svg {...props}>
+          <path d="M12 15.3a3.3 3.3 0 1 0 0-6.6 3.3 3.3 0 0 0 0 6.6Z" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M19.2 13.5a1.2 1.2 0 0 0 .24 1.33l.03.03a1.45 1.45 0 1 1-2.06 2.05l-.03-.03a1.2 1.2 0 0 0-1.35-.24 1.2 1.2 0 0 0-.73 1.1V18a1.45 1.45 0 0 1-2.9 0v-.04a1.2 1.2 0 0 0-.79-1.12 1.2 1.2 0 0 0-1.34.24l-.03.03a1.45 1.45 0 1 1-2.05-2.05l.03-.03a1.2 1.2 0 0 0 .24-1.35 1.2 1.2 0 0 0-1.1-.73H6a1.45 1.45 0 0 1 0-2.9h.04a1.2 1.2 0 0 0 1.12-.79 1.2 1.2 0 0 0-.24-1.34l-.03-.03A1.45 1.45 0 1 1 8.94 4l.03.03a1.2 1.2 0 0 0 1.35.24h.06a1.2 1.2 0 0 0 .73-1.1V3a1.45 1.45 0 0 1 2.9 0v.04a1.2 1.2 0 0 0 .79 1.12h.06a1.2 1.2 0 0 0 1.34-.24l.03-.03A1.45 1.45 0 1 1 18.28 6l-.03.03a1.2 1.2 0 0 0-.24 1.35v.06a1.2 1.2 0 0 0 1.1.73H19a1.45 1.45 0 0 1 0 2.9h-.04a1.2 1.2 0 0 0-1.12.79v.06Z" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      );
+    case 'logs':
+      return (
+        <svg {...props}>
+          <path d="M7 4.8h8.3l3 3V19a1.7 1.7 0 0 1-1.7 1.7H7A1.7 1.7 0 0 1 5.3 19V6.5A1.7 1.7 0 0 1 7 4.8Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          <path d="M15.3 4.8V8h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M8.4 12h7.2M8.4 15.2h7.2" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case 'logout':
+      return (
+        <svg {...props}>
+          <path d="M9 5H6.7A1.7 1.7 0 0 0 5 6.7v10.6A1.7 1.7 0 0 0 6.7 19H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          <path d="M14 16l4-4-4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M18 12H9" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case 'search':
+      return (
+        <svg {...props}>
+          <circle cx="11" cy="11" r="6.8" stroke="currentColor" strokeWidth="1.8" />
+          <path d="M19 19l-3.6-3.6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+      );
+    case 'shield':
+      return (
+        <svg {...props}>
+          <path d="M12 3.7 5.8 6.1v5.5c0 4.2 2.7 7.2 6.2 8.7 3.5-1.5 6.2-4.5 6.2-8.7V6.1L12 3.7Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        </svg>
+      );
+    default:
+      return null;
+  }
+}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -33,18 +119,30 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="shell page">
       <aside className="sidebar">
-        <div className="brand">Opener Bot Admin</div>
-        {links.map((link) => (
-          <Link
-            key={link.href}
-            href={link.href}
-            className={pathname === link.href ? 'active' : ''}
-          >
-            {link.label}
-          </Link>
-        ))}
+        <div className="brand">
+          <div className="brand-icon">
+            <Icon name="logo" />
+          </div>
+          <div>
+            <div className="brand-title">Telegram Bot</div>
+            <div className="brand-subtitle">Admin Panel</div>
+          </div>
+        </div>
+        <nav className="nav-list">
+          {links.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className={`nav-item ${pathname === link.href ? 'active' : ''}`}
+            >
+              <Icon name={link.icon} className="nav-icon" />
+              {link.label}
+            </Link>
+          ))}
+        </nav>
         <div className="spacer" />
-        <button className="secondary" onClick={logout} disabled={loggingOut}>
+        <button className="logout-button" onClick={logout} disabled={loggingOut}>
+          <Icon name="logout" />
           {loggingOut ? 'Logout...' : 'Logout'}
         </button>
       </aside>

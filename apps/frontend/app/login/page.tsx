@@ -55,14 +55,22 @@ export default function LoginPage() {
   };
 
   if (checking) {
-    return <div className="auth-wrap">Checking session...</div>;
+    return (
+      <div className="auth-wrap">
+        <div className="panel auth-card skeleton" style={{ height: 340 }} />
+      </div>
+    );
   }
 
   return (
     <div className="auth-wrap">
-      <form className="card" onSubmit={onSubmit}>
-        <h1>Opener Bot Admin</h1>
-        <label htmlFor="login">Login</label>
+      <form className="panel auth-card" onSubmit={onSubmit}>
+        <h1 className="auth-title">Telegram Bot</h1>
+        <p className="auth-subtitle">Private operator access to your admin workspace</p>
+
+        <label className="field-label" htmlFor="login">
+          Login
+        </label>
         <input
           id="login"
           value={login}
@@ -71,7 +79,9 @@ export default function LoginPage() {
           required
         />
 
-        <label htmlFor="password">Password</label>
+        <label className="field-label" htmlFor="password" style={{ marginTop: 16 }}>
+          Password
+        </label>
         <input
           id="password"
           type="password"
@@ -81,13 +91,17 @@ export default function LoginPage() {
           required
         />
 
-        <div style={{ marginTop: 16 }}>
-          <button type="submit" disabled={loading}>
-            {loading ? 'Logging in...' : 'Login'}
+        <div className="button-row" style={{ marginTop: 18 }}>
+          <button className="button-primary" type="submit" disabled={loading}>
+            {loading ? 'Signing in...' : 'Login'}
           </button>
         </div>
 
-        {error && <p className="error">{error}</p>}
+        {error ? (
+          <div className="toast error" style={{ marginTop: 14, position: 'relative', right: 'unset', bottom: 'unset' }}>
+            {error}
+          </div>
+        ) : null}
       </form>
     </div>
   );
