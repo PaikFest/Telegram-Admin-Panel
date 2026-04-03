@@ -9,6 +9,9 @@ RUN npm ci
 
 COPY apps/frontend ./apps/frontend
 
+ARG ADMIN_BASE_PATH
+ENV NEXT_PUBLIC_ADMIN_BASE_PATH=${ADMIN_BASE_PATH}
+
 RUN npm run build --workspace apps/frontend && npm prune --omit=dev
 
 WORKDIR /app/apps/frontend

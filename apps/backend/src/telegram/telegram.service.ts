@@ -1,7 +1,8 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { DeliveryStatus, Direction, MessageType, Prisma } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
-import TelegramBot, { Message } from 'node-telegram-bot-api';
+import { createReadStream } from 'node:fs';
+import TelegramBot, { Message, PhotoSize } from 'node-telegram-bot-api';
 import { sanitizeOptionalPlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -22,6 +23,7 @@ export type TelegramSendResult =
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private bot: TelegramBot | null = null;
+  private botToken: string | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -36,6 +38,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       throw new Error('BOT_TOKEN is required');
     }
 
+    this.botToken = token;
     this.bot = new TelegramBot(token, {
       polling: {
         autoStart: false,
@@ -95,6 +98,65 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async sendPhoto(
+    telegramId: string,
+    filePath: string,
+    caption?: string | null,
+  ): Promise<TelegramSendResult> {
+    if (!this.bot) {
+      return {
+        success: false,
+        errorText: 'Telegram bot is not initialized',
+        isRateLimit: false,
+        retryAfterSeconds: null,
+      };
+    }
+
+    try {
+      const sentMessage = await this.bot.sendPhoto(telegramId, createReadStream(filePath), {
+        caption: caption ?? undefined,
+      });
+
+      return {
+        success: true,
+        telegramMessageId: sentMessage.message_id,
+        rawPayload: this.toJson(sentMessage),
+      };
+    } catch (error) {
+      const parsed = this.extractTelegramError(error);
+
+      return {
+        success: false,
+        errorText: parsed.errorText,
+        isRateLimit: parsed.isRateLimit,
+        retryAfterSeconds: parsed.retryAfterSeconds,
+      };
+    }
+  }
+
+  async downloadFileById(fileId: string): Promise<{ buffer: Buffer; filePath: string }> {
+    if (!this.bot || !this.botToken) {
+      throw new Error('Telegram bot is not initialized');
+    }
+
+    const file = await this.bot.getFile(fileId);
+    if (!file.file_path) {
+      throw new Error('Telegram file path is missing');
+    }
+
+    const url = `https://api.telegram.org/file/bot${this.botToken}/${file.file_path}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Telegram file download failed with status ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return {
+      buffer: Buffer.from(arrayBuffer),
+      filePath: file.file_path,
+    };
+  }
+
   private async handleIncomingMessage(message: Message): Promise<void> {
     if (!message.from || message.from.is_bot) {
       return;
@@ -122,15 +184,21 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         },
       });
 
-      const text = sanitizeOptionalPlainText(message.text ?? message.caption ?? null);
+      const messageType = this.detectMessageType(message);
+      const text = sanitizeOptionalPlainText(message.text ?? null);
+      const caption = sanitizeOptionalPlainText(message.caption ?? null);
+      const photo = this.pickLargestPhoto(message.photo);
 
       await this.prisma.message.create({
         data: {
           userId: user.id,
           telegramMessageId: message.message_id,
           direction: Direction.INCOMING,
-          messageType: this.detectMessageType(message),
+          messageType,
           text,
+          caption,
+          telegramFileId: photo?.file_id ?? null,
+          telegramFileUniqueId: photo?.file_unique_id ?? null,
           rawPayload: this.toJson(message),
           deliveryStatus: DeliveryStatus.SENT,
           isRead: false,
@@ -156,6 +224,18 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     if (message.contact) return MessageType.CONTACT;
     if (message.location) return MessageType.LOCATION;
     return MessageType.OTHER;
+  }
+
+  private pickLargestPhoto(photoSizes?: PhotoSize[]): PhotoSize | null {
+    if (!photoSizes || photoSizes.length === 0) {
+      return null;
+    }
+
+    return photoSizes.reduce((largest, current) => {
+      const largestArea = (largest.width ?? 0) * (largest.height ?? 0);
+      const currentArea = (current.width ?? 0) * (current.height ?? 0);
+      return currentArea >= largestArea ? current : largest;
+    });
   }
 
   private extractTelegramError(error: unknown): {

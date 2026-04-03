@@ -3,10 +3,12 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Direction, OutboxSourceType, Prisma } from '@prisma/client';
-import { sanitizePlainText } from '../common/sanitize.util';
+import { Direction, MessageType, OutboxSourceType, Prisma } from '@prisma/client';
+import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
+
+const MAX_TELEGRAM_CAPTION_LENGTH = 1024;
 
 @Injectable()
 export class InboxService {
@@ -134,6 +136,7 @@ export class InboxService {
       data: {
         userId,
         sourceType: OutboxSourceType.REPLY,
+        messageType: MessageType.TEXT,
         text: sanitizedText,
       },
       select: {
@@ -144,6 +147,65 @@ export class InboxService {
     await this.logsService.info(
       'outbox',
       `Reply queued for userId=${userId}`,
+      {
+        outboxId: job.id,
+      } as Prisma.InputJsonValue,
+    );
+
+    return { success: true, outboxId: job.id };
+  }
+
+  async sendReplyMedia(
+    userId: number,
+    file: {
+      path: string;
+      mimetype: string;
+      originalname: string;
+    } | null,
+    caption?: string,
+  ): Promise<{ success: boolean; outboxId: number }> {
+    if (!file) {
+      throw new BadRequestException('Image file is required');
+    }
+
+    const normalizedCaption = sanitizeOptionalPlainText(caption);
+    if (
+      normalizedCaption !== null &&
+      normalizedCaption.length > MAX_TELEGRAM_CAPTION_LENGTH
+    ) {
+      throw new BadRequestException(
+        `Caption is too long (max ${MAX_TELEGRAM_CAPTION_LENGTH} characters)`,
+      );
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const job = await this.prisma.outbox.create({
+      data: {
+        userId,
+        sourceType: OutboxSourceType.REPLY,
+        messageType: MessageType.PHOTO,
+        text: null,
+        caption: normalizedCaption,
+        filePath: file.path,
+        mimeType: sanitizeOptionalPlainText(file.mimetype),
+        originalFileName: sanitizeOptionalPlainText(file.originalname),
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    await this.logsService.info(
+      'outbox',
+      `Photo reply queued for userId=${userId}`,
       {
         outboxId: job.id,
       } as Prisma.InputJsonValue,

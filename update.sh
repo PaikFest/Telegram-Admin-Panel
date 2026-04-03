@@ -6,11 +6,17 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+APP_DIR="/opt/Telegram-AdminBot-Panel"
+
+if [ ! -d "$APP_DIR" ]; then
+  echo "$APP_DIR not found"
+  exit 1
+fi
+
+cd "$APP_DIR"
 
 if [ ! -f .env ]; then
-  echo ".env not found in $SCRIPT_DIR"
+  echo ".env not found in $APP_DIR"
   exit 1
 fi
 

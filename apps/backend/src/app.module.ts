@@ -5,6 +5,7 @@ import { BroadcastsModule } from './broadcasts/broadcasts.module';
 import { HealthController } from './health/health.controller';
 import { InboxModule } from './inbox/inbox.module';
 import { LogsModule } from './logs/logs.module';
+import { MediaModule } from './media/media.module';
 import { OutboxModule } from './outbox/outbox.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TelegramModule } from './telegram/telegram.module';
@@ -18,6 +19,7 @@ import { UsersModule } from './users/users.module';
     AuthModule,
     TelegramModule,
     OutboxModule,
+    MediaModule,
     UsersModule,
     InboxModule,
     BroadcastsModule,

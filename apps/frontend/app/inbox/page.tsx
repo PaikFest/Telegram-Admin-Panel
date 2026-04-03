@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { AppShell } from '../../components/AppShell';
-import { apiFetch, formatDate } from '../../lib/api';
+import { apiFetch, formatDate, withAdminBasePath } from '../../lib/api';
 import { useAuth } from '../../lib/useAuth';
 
 type Conversation = {
@@ -27,7 +27,10 @@ type Conversation = {
 type ChatMessage = {
   id: number;
   direction: 'INCOMING' | 'OUTGOING';
+  messageType: 'TEXT' | 'PHOTO' | 'VIDEO' | 'DOCUMENT' | 'STICKER' | 'AUDIO' | 'VOICE' | 'CONTACT' | 'LOCATION' | 'OTHER';
   text: string | null;
+  caption: string | null;
+  telegramFileId: string | null;
   deliveryStatus: 'PENDING' | 'SENT' | 'FAILED';
   errorText: string | null;
   createdAt: string;
@@ -40,7 +43,10 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [search, setSearch] = useState('');
   const [replyText, setReplyText] = useState('');
+  const [mediaCaption, setMediaCaption] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [sending, setSending] = useState(false);
+  const [sendingMedia, setSendingMedia] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchConversations = useCallback(async () => {
@@ -123,6 +129,52 @@ export default function InboxPage() {
     }
   };
 
+  const sendMediaReply = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedUserId || !selectedFile) return;
+
+    setSendingMedia(true);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      if (mediaCaption.trim()) {
+        formData.append('caption', mediaCaption.trim());
+      }
+
+      const response = await fetch(withAdminBasePath(`/api/inbox/conversations/${selectedUserId}/reply-media`), {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Request failed with status ${response.status}`;
+        try {
+          const payload = (await response.json()) as { message?: string | string[] };
+          if (Array.isArray(payload.message)) {
+            errorMessage = payload.message.join(', ');
+          } else if (typeof payload.message === 'string') {
+            errorMessage = payload.message;
+          }
+        } catch {
+          // keep default error message
+        }
+        throw new Error(errorMessage);
+      }
+
+      setSelectedFile(null);
+      setMediaCaption('');
+      await fetchConversations();
+      await fetchMessages(selectedUserId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send image');
+    } finally {
+      setSendingMedia(false);
+    }
+  };
+
   if (loading) {
     return <div className="auth-wrap">Loading...</div>;
   }
@@ -189,7 +241,28 @@ export default function InboxPage() {
                 key={message.id}
                 className={`msg ${message.direction === 'INCOMING' ? 'incoming' : 'outgoing'}`}
               >
-                <div>{message.text || '[non-text message]'}</div>
+                {message.messageType === 'PHOTO' ? (
+                  <>
+                    {message.telegramFileId ? (
+                      <img
+                        src={withAdminBasePath(`/api/media/messages/${message.id}/file`)}
+                        alt="photo"
+                        style={{
+                          maxWidth: '100%',
+                          borderRadius: 8,
+                          display: 'block',
+                        }}
+                      />
+                    ) : (
+                      <div>[photo unavailable]</div>
+                    )}
+                    {message.caption ? (
+                      <div style={{ marginTop: 8 }}>{message.caption}</div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div>{message.text || '[non-text message]'}</div>
+                )}
                 <div className="msg-meta">
                   {formatDate(message.createdAt)} · {message.deliveryStatus}
                   {message.errorText ? ` · ${message.errorText}` : ''}
@@ -211,6 +284,27 @@ export default function InboxPage() {
                 {sending ? 'Sending...' : 'Send'}
               </button>
               {error && <span className="error">{error}</span>}
+            </div>
+          </form>
+
+          <form className="reply-box" onSubmit={sendMediaReply}>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+              disabled={!selectedUserId}
+            />
+            <input
+              placeholder="Optional caption"
+              value={mediaCaption}
+              onChange={(event) => setMediaCaption(event.target.value)}
+              maxLength={1024}
+              disabled={!selectedUserId}
+            />
+            <div className="row">
+              <button type="submit" disabled={!selectedUserId || sendingMedia || !selectedFile}>
+                {sendingMedia ? 'Uploading...' : 'Send Image'}
+              </button>
             </div>
           </form>
         </section>

@@ -6,7 +6,7 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-APP_DIR="/opt/opener-bot-admin"
+APP_DIR="/opt/Telegram-AdminBot-Panel"
 
 if [ ! -d "$APP_DIR" ]; then
   echo "$APP_DIR not found"
@@ -36,6 +36,24 @@ update_env() {
 update_env "ADMIN_LOGIN" "$NEW_LOGIN"
 update_env "ADMIN_PASSWORD" "$NEW_PASSWORD"
 
+get_env_value() {
+  local key="$1"
+  local value
+  value="$(grep -E "^${key}=" .env | head -n 1 | cut -d '=' -f2- || true)"
+  printf '%s' "$value"
+}
+
+APP_URL_VALUE="$(get_env_value APP_URL)"
+ADMIN_BASE_PATH_VALUE="$(get_env_value ADMIN_BASE_PATH)"
+if [ -n "$ADMIN_BASE_PATH_VALUE" ] && [[ "$ADMIN_BASE_PATH_VALUE" != /* ]]; then
+  ADMIN_BASE_PATH_VALUE="/${ADMIN_BASE_PATH_VALUE}"
+fi
+
+ADMIN_URL=""
+if [ -n "$APP_URL_VALUE" ] && [ -n "$ADMIN_BASE_PATH_VALUE" ]; then
+  ADMIN_URL="${APP_URL_VALUE}${ADMIN_BASE_PATH_VALUE}/login"
+fi
+
 chmod 600 .env
 
 docker compose up -d backend
@@ -46,12 +64,14 @@ docker compose exec -T backend node dist/tools/reset-admin-password.js "$NEW_LOG
 cat > /root/opener-bot-admin-credentials.txt <<EOF
 Opener Bot Admin
 Updated at: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+Admin URL: ${ADMIN_URL}
 Login: ${NEW_LOGIN}
 Password: ${NEW_PASSWORD}
 EOF
 chmod 600 /root/opener-bot-admin-credentials.txt
 
 echo "Admin credentials reset"
+echo "Admin URL: ${ADMIN_URL}"
 echo "Login: ${NEW_LOGIN}"
 echo "Password: ${NEW_PASSWORD}"
 echo "Credentials file: /root/opener-bot-admin-credentials.txt"

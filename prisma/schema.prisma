@@ -101,6 +101,9 @@ model Message {
   direction         Direction
   messageType       MessageType    @map("message_type")
   text              String?
+  caption           String?
+  telegramFileId    String?        @map("telegram_file_id") @db.VarChar(255)
+  telegramFileUniqueId String?     @map("telegram_file_unique_id") @db.VarChar(255)
   rawPayload        Json           @map("raw_payload")
   deliveryStatus    DeliveryStatus @default(PENDING) @map("delivery_status")
   errorText         String?        @map("error_text")
@@ -154,7 +157,12 @@ model Outbox {
   id                  Int             @id @default(autoincrement())
   userId              Int             @map("user_id")
   sourceType          OutboxSourceType @map("source_type")
-  text                String
+  messageType         MessageType      @default(TEXT) @map("message_type")
+  text                String?
+  caption             String?
+  filePath            String?          @map("file_path")
+  mimeType            String?          @map("mime_type") @db.VarChar(255)
+  originalFileName    String?          @map("original_file_name") @db.VarChar(255)
   status              OutboxStatus    @default(PENDING)
   errorText           String?         @map("error_text")
   attempts            Int             @default(0)

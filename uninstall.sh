@@ -6,7 +6,7 @@ if [ "${EUID}" -ne 0 ]; then
   exit 1
 fi
 
-APP_DIR="/opt/opener-bot-admin"
+APP_DIR="/opt/Telegram-AdminBot-Panel"
 
 if [ "${CONFIRM_UNINSTALL:-}" != "YES" ]; then
   read -r -p "Type DELETE to uninstall Opener Bot Admin: " CONFIRM

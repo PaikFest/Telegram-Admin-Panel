@@ -14,10 +14,17 @@ async function bootstrap(): Promise<void> {
 
   const appUrl = configService.getOrThrow<string>('APP_URL');
   const databaseUrl = configService.getOrThrow<string>('DATABASE_URL');
+  const adminBasePath = configService.getOrThrow<string>('ADMIN_BASE_PATH');
+  const normalizedBasePath = adminBasePath.replace(/^\/+|\/+$/g, '');
+  if (!normalizedBasePath) {
+    throw new Error('ADMIN_BASE_PATH must not be empty');
+  }
+  const apiPrefix = `${normalizedBasePath}/api`;
+  const loginRateLimitPath = `/${apiPrefix}/auth/login`;
 
   const expressApp = app.getHttpAdapter().getInstance();
   expressApp.set('trust proxy', 1);
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix(apiPrefix);
 
   app.use(helmet());
   app.enableCors({
@@ -49,7 +56,7 @@ async function bootstrap(): Promise<void> {
   );
 
   app.use(
-    '/api/auth/login',
+    loginRateLimitPath,
     rateLimit({
       windowMs: 15 * 60 * 1000,
       limit: 10,

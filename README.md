@@ -7,6 +7,8 @@ This project includes only:
 - admin login/password auth (session cookie)
 - Telegram long polling runtime
 - outbox queue + worker-based outgoing delivery
+- photo support in inbox (incoming preview + outgoing photo reply)
+- secret admin base path for frontend and API
 - user list
 - inbox dialogs
 - reply from bot
@@ -33,6 +35,12 @@ No VPN logic, Hiddify/3x-ui integration, payments, tariffs, subscriptions, Mini 
 - Worker sends messages via Telegram Bot API, writes `messages` history, updates outbox and broadcast delivery status.
 - Stale `PROCESSING` jobs are recovered back to `PENDING` after timeout (default 5 minutes).
 - Telegram `429` (`retry_after`) is handled with delay/backoff and controlled retry.
+- Photo replies are queued in `outbox` and sent by worker via `sendPhoto`.
+
+## Media flow
+- Incoming Telegram photos are stored as `messages` with `messageType=PHOTO`, `caption`, `telegram_file_id`, `telegram_file_unique_id`.
+- Photo preview is served only via backend proxy endpoint: `GET <ADMIN_BASE_PATH>/api/media/messages/:messageId/file`.
+- Frontend never receives `BOT_TOKEN`.
 
 ## Monorepo layout
 - `apps/backend`
@@ -51,6 +59,9 @@ Only these variables are used:
 - `SESSION_SECRET`
 - `ADMIN_LOGIN`
 - `ADMIN_PASSWORD`
+- `ADMIN_PATH_TOKEN`
+- `ADMIN_PATH_UUID`
+- `ADMIN_BASE_PATH`
 - `APP_URL`
 - `NODE_ENV`
 
@@ -90,12 +101,12 @@ cp .env.example .env
 ```bash
 docker compose up -d --build
 ```
-4. Open `http://<server-ip>`.
+4. Open `http://<server-ip><ADMIN_BASE_PATH>/login`.
 
 ## Health checks
 - Caddy: `GET /health`
-- Backend: `GET /api/health`
-- Frontend: `GET /health` on frontend container
+- Backend: `GET <ADMIN_BASE_PATH>/api/health`
+- Frontend: `GET <ADMIN_BASE_PATH>/health` on frontend container
 
 ## Security defaults
 - password hashing: bcrypt
@@ -109,4 +120,5 @@ docker compose up -d --build
 
 ## Notes
 - On first backend start, admin account is created from `ADMIN_LOGIN`/`ADMIN_PASSWORD` if DB has no admins.
+- `install.sh` generates hidden admin path (`ADMIN_BASE_PATH`) and prints full Admin URL with login/password.
 - `install.sh` writes generated credentials to `/root/opener-bot-admin-credentials.txt` with mode `600`.

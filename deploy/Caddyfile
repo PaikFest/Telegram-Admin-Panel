@@ -5,11 +5,17 @@
     respond "ok" 200
   }
 
-  handle /api/* {
+  @api path {$ADMIN_BASE_PATH}/api {$ADMIN_BASE_PATH}/api/*
+  handle @api {
     reverse_proxy backend:3001
   }
 
-  handle {
+  @app path {$ADMIN_BASE_PATH} {$ADMIN_BASE_PATH}/*
+  handle @app {
     reverse_proxy frontend:3000
+  }
+
+  handle {
+    respond "not found" 404
   }
 }

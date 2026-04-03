@@ -33,8 +33,8 @@ export class BroadcastsService {
       if (totalTargets > 0) {
         await tx.$executeRaw`
           WITH inserted_outbox AS (
-            INSERT INTO "outbox" ("user_id", "source_type", "text", "status", "attempts", "created_at")
-            SELECT "id", 'BROADCAST'::"OutboxSourceType", ${text}, 'PENDING'::"OutboxStatus", 0, NOW()
+            INSERT INTO "outbox" ("user_id", "source_type", "message_type", "text", "status", "attempts", "created_at")
+            SELECT "id", 'BROADCAST'::"OutboxSourceType", 'TEXT'::"MessageType", ${text}, 'PENDING'::"OutboxStatus", 0, NOW()
             FROM "users"
             WHERE "is_blocked" = false
             RETURNING "id", "user_id"

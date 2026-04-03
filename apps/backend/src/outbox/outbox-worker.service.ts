@@ -8,6 +8,8 @@ import {
   OutboxStatus,
   Prisma,
 } from '@prisma/client';
+import { existsSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -16,7 +18,12 @@ type ClaimedOutboxRow = {
   id: number;
   user_id: number;
   source_type: 'REPLY' | 'BROADCAST';
-  text: string;
+  message_type: MessageType;
+  text: string | null;
+  caption: string | null;
+  file_path: string | null;
+  mime_type: string | null;
+  original_file_name: string | null;
   attempts: number;
 };
 
@@ -109,7 +116,9 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       RETURNING "id";
     `;
 
-    const failed = await this.prisma.$queryRaw<Array<{ id: number }>>`
+    const failed = await this.prisma.$queryRaw<
+      Array<{ id: number; message_type: MessageType; file_path: string | null }>
+    >`
       UPDATE "outbox"
       SET "status" = 'FAILED',
           "processing_started_at" = NULL,
@@ -118,7 +127,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         AND "processing_started_at" IS NOT NULL
         AND "processing_started_at" < ${staleBefore}
         AND "attempts" >= ${MAX_OUTBOX_ATTEMPTS}
-      RETURNING "id";
+      RETURNING "id", "message_type", "file_path";
     `;
 
     if (requeued.length === 0 && failed.length === 0) {
@@ -153,6 +162,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
     const affectedIds = [...requeuedIds, ...failedIds];
     await this.refreshBroadcastStatsByOutboxIds(affectedIds);
+
+    for (const job of failed) {
+      await this.cleanupUploadedFile(job.id, job.message_type, job.file_path, 'stale-failed');
+    }
+
     await this.logsService.warn(
       'outbox-worker',
       `Recovered stale PROCESSING jobs requeued=${requeuedIds.length}, failed=${failedIds.length}`,
@@ -177,7 +191,17 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             "error_text" = NULL
         FROM picked
         WHERE o."id" = picked."id"
-        RETURNING o."id", o."user_id", o."source_type", o."text", o."attempts";
+        RETURNING
+          o."id",
+          o."user_id",
+          o."source_type",
+          o."message_type",
+          o."text",
+          o."caption",
+          o."file_path",
+          o."mime_type",
+          o."original_file_name",
+          o."attempts";
       `;
 
       if (claimed.length > 0) {
@@ -216,7 +240,26 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    let sendResult = await this.telegramService.sendText(user.telegramId, job.text);
+    let sendResult;
+    if (job.message_type === MessageType.PHOTO) {
+      if (!job.file_path || !existsSync(job.file_path)) {
+        await this.failJob(job, 'Photo file is missing on disk');
+        return;
+      }
+
+      sendResult = await this.telegramService.sendPhoto(
+        user.telegramId,
+        job.file_path,
+        job.caption,
+      );
+    } else {
+      if (!job.text || job.text.trim().length === 0) {
+        await this.failJob(job, 'Text message is empty');
+        return;
+      }
+
+      sendResult = await this.telegramService.sendText(user.telegramId, job.text);
+    }
     let rateLimitRetries = 0;
 
     while (!sendResult.success && sendResult.isRateLimit && rateLimitRetries < MAX_429_RETRIES_PER_CLAIM) {
@@ -227,7 +270,23 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       );
       await this.sleep((retryAfterSeconds + 1) * 1000);
       rateLimitRetries += 1;
-      sendResult = await this.telegramService.sendText(user.telegramId, job.text);
+      if (job.message_type === MessageType.PHOTO) {
+        if (!job.file_path || !existsSync(job.file_path)) {
+          await this.failJob(job, 'Photo file is missing on disk');
+          return;
+        }
+        sendResult = await this.telegramService.sendPhoto(
+          user.telegramId,
+          job.file_path,
+          job.caption,
+        );
+      } else {
+        if (!job.text || job.text.trim().length === 0) {
+          await this.failJob(job, 'Text message is empty');
+          return;
+        }
+        sendResult = await this.telegramService.sendText(user.telegramId, job.text);
+      }
     }
 
     if (sendResult.success) {
@@ -248,6 +307,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     telegramMessageId: number,
     rawPayload: Prisma.InputJsonValue,
   ): Promise<void> {
+    const photoIds =
+      job.message_type === MessageType.PHOTO
+        ? this.extractPhotoIds(rawPayload)
+        : { fileId: null, fileUniqueId: null };
+
     const broadcastId = await this.prisma.$transaction(async (tx) => {
       await tx.outbox.update({
         where: { id: job.id },
@@ -264,8 +328,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
           userId: job.user_id,
           telegramMessageId,
           direction: Direction.OUTGOING,
-          messageType: MessageType.TEXT,
-          text: job.text,
+          messageType: job.message_type,
+          text: job.message_type === MessageType.TEXT ? job.text : null,
+          caption: job.message_type === MessageType.PHOTO ? job.caption : null,
+          telegramFileId: photoIds.fileId,
+          telegramFileUniqueId: photoIds.fileUniqueId,
           rawPayload,
           deliveryStatus: DeliveryStatus.SENT,
           isRead: true,
@@ -289,6 +356,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
       return delivery?.broadcastId ?? null;
     });
+
+    await this.cleanupUploadedFile(job.id, job.message_type, job.file_path, 'sent');
 
     if (broadcastId) {
       await this.refreshBroadcastStats(broadcastId);
@@ -347,8 +416,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
           userId: job.user_id,
           telegramMessageId: null,
           direction: Direction.OUTGOING,
-          messageType: MessageType.TEXT,
-          text: job.text,
+          messageType: job.message_type,
+          text: job.message_type === MessageType.TEXT ? job.text : null,
+          caption: job.message_type === MessageType.PHOTO ? job.caption : null,
+          telegramFileId: null,
+          telegramFileUniqueId: null,
           rawPayload: this.toJson({ error: errorText }),
           deliveryStatus: DeliveryStatus.FAILED,
           errorText,
@@ -380,6 +452,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
       return delivery?.broadcastId ?? null;
     });
+
+    await this.cleanupUploadedFile(job.id, job.message_type, job.file_path, 'failed');
 
     if (broadcastId) {
       await this.refreshBroadcastStats(broadcastId);
@@ -489,6 +563,26 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
+  private extractPhotoIds(rawPayload: Prisma.InputJsonValue): {
+    fileId: string | null;
+    fileUniqueId: string | null;
+  } {
+    if (!rawPayload || typeof rawPayload !== 'object' || Array.isArray(rawPayload)) {
+      return { fileId: null, fileUniqueId: null };
+    }
+
+    const payload = rawPayload as { photo?: Array<{ file_id?: string; file_unique_id?: string }> };
+    if (!Array.isArray(payload.photo) || payload.photo.length === 0) {
+      return { fileId: null, fileUniqueId: null };
+    }
+
+    const largest = payload.photo[payload.photo.length - 1];
+    return {
+      fileId: largest?.file_id ?? null,
+      fileUniqueId: largest?.file_unique_id ?? null,
+    };
+  }
+
   private toJson(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
   }
@@ -497,5 +591,33 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, ms);
     });
+  }
+
+  private async cleanupUploadedFile(
+    outboxId: number,
+    messageType: MessageType,
+    filePath: string | null,
+    reason: 'sent' | 'failed' | 'stale-failed',
+  ): Promise<void> {
+    if (messageType !== MessageType.PHOTO || !filePath) {
+      return;
+    }
+
+    try {
+      if (!existsSync(filePath)) {
+        return;
+      }
+
+      await unlink(filePath);
+    } catch (error) {
+      await this.logsService.warn(
+        'outbox-worker',
+        `Failed to cleanup uploaded photo for outboxId=${outboxId} reason=${reason}`,
+        {
+          filePath,
+          error: String(error),
+        } as Prisma.InputJsonValue,
+      );
+    }
   }
 }

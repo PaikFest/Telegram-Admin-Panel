@@ -1,3 +1,21 @@
+const ADMIN_BASE_PATH = (process.env.NEXT_PUBLIC_ADMIN_BASE_PATH ?? '').replace(/\/+$/, '');
+
+export function withAdminBasePath(path: string): string {
+  if (!path.startsWith('/')) {
+    return path;
+  }
+
+  if (!ADMIN_BASE_PATH) {
+    return path;
+  }
+
+  if (path.startsWith(`${ADMIN_BASE_PATH}/`) || path === ADMIN_BASE_PATH) {
+    return path;
+  }
+
+  return `${ADMIN_BASE_PATH}${path}`;
+}
+
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
 
@@ -5,7 +23,7 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
     headers.set('Content-Type', 'application/json');
   }
 
-  const response = await fetch(path, {
+  const response = await fetch(withAdminBasePath(path), {
     ...init,
     headers,
     credentials: 'include',
