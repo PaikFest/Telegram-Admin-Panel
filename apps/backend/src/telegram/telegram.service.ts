@@ -1,0 +1,218 @@
+import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { DeliveryStatus, Direction, MessageType, Prisma } from '@prisma/client';
+import { ConfigService } from '@nestjs/config';
+import TelegramBot, { Message } from 'node-telegram-bot-api';
+import { sanitizeOptionalPlainText } from '../common/sanitize.util';
+import { LogsService } from '../logs/logs.service';
+import { PrismaService } from '../prisma/prisma.service';
+
+export type TelegramSendResult =
+  | {
+      success: true;
+      telegramMessageId: number;
+      rawPayload: Prisma.InputJsonValue;
+    }
+  | {
+      success: false;
+      errorText: string;
+      isRateLimit: boolean;
+      retryAfterSeconds: number | null;
+    };
+
+@Injectable()
+export class TelegramService implements OnModuleInit, OnModuleDestroy {
+  private bot: TelegramBot | null = null;
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+    private readonly logsService: LogsService,
+  ) {}
+
+  async onModuleInit(): Promise<void> {
+    const token = this.configService.get<string>('BOT_TOKEN');
+
+    if (!token) {
+      throw new Error('BOT_TOKEN is required');
+    }
+
+    this.bot = new TelegramBot(token, {
+      polling: {
+        autoStart: false,
+        params: {
+          timeout: 30,
+        },
+      },
+    });
+
+    this.bot.on('message', (message: Message) => {
+      void this.handleIncomingMessage(message);
+    });
+
+    this.bot.on('polling_error', (error: Error) => {
+      void this.logsService.error('telegram', 'Polling error', {
+        message: error.message,
+      } as Prisma.InputJsonValue);
+    });
+
+    await this.bot.startPolling();
+    await this.logsService.info('telegram', 'Long polling started');
+  }
+
+  async onModuleDestroy(): Promise<void> {
+    if (this.bot) {
+      await this.bot.stopPolling();
+    }
+  }
+
+  async sendText(telegramId: string, text: string): Promise<TelegramSendResult> {
+    if (!this.bot) {
+      return {
+        success: false,
+        errorText: 'Telegram bot is not initialized',
+        isRateLimit: false,
+        retryAfterSeconds: null,
+      };
+    }
+
+    try {
+      const sentMessage = await this.bot.sendMessage(telegramId, text);
+
+      return {
+        success: true,
+        telegramMessageId: sentMessage.message_id,
+        rawPayload: this.toJson(sentMessage),
+      };
+    } catch (error) {
+      const parsed = this.extractTelegramError(error);
+
+      return {
+        success: false,
+        errorText: parsed.errorText,
+        isRateLimit: parsed.isRateLimit,
+        retryAfterSeconds: parsed.retryAfterSeconds,
+      };
+    }
+  }
+
+  private async handleIncomingMessage(message: Message): Promise<void> {
+    if (!message.from || message.from.is_bot) {
+      return;
+    }
+
+    try {
+      const telegramId = String(message.from.id);
+
+      const user = await this.prisma.user.upsert({
+        where: { telegramId },
+        update: {
+          username: sanitizeOptionalPlainText(message.from.username),
+          firstName: sanitizeOptionalPlainText(message.from.first_name),
+          lastName: sanitizeOptionalPlainText(message.from.last_name),
+          languageCode: sanitizeOptionalPlainText(message.from.language_code),
+          lastSeenAt: new Date(),
+        },
+        create: {
+          telegramId,
+          username: sanitizeOptionalPlainText(message.from.username),
+          firstName: sanitizeOptionalPlainText(message.from.first_name),
+          lastName: sanitizeOptionalPlainText(message.from.last_name),
+          languageCode: sanitizeOptionalPlainText(message.from.language_code),
+          lastSeenAt: new Date(),
+        },
+      });
+
+      const text = sanitizeOptionalPlainText(message.text ?? message.caption ?? null);
+
+      await this.prisma.message.create({
+        data: {
+          userId: user.id,
+          telegramMessageId: message.message_id,
+          direction: Direction.INCOMING,
+          messageType: this.detectMessageType(message),
+          text,
+          rawPayload: this.toJson(message),
+          deliveryStatus: DeliveryStatus.SENT,
+          isRead: false,
+        },
+      });
+    } catch (error) {
+      await this.logsService.error(
+        'telegram',
+        'Failed to process incoming message',
+        { error: String(error) } as Prisma.InputJsonValue,
+      );
+    }
+  }
+
+  private detectMessageType(message: Message): MessageType {
+    if (message.text) return MessageType.TEXT;
+    if (message.photo) return MessageType.PHOTO;
+    if (message.video) return MessageType.VIDEO;
+    if (message.document) return MessageType.DOCUMENT;
+    if (message.sticker) return MessageType.STICKER;
+    if (message.audio) return MessageType.AUDIO;
+    if (message.voice) return MessageType.VOICE;
+    if (message.contact) return MessageType.CONTACT;
+    if (message.location) return MessageType.LOCATION;
+    return MessageType.OTHER;
+  }
+
+  private extractTelegramError(error: unknown): {
+    errorText: string;
+    retryAfterSeconds: number | null;
+    isRateLimit: boolean;
+  } {
+    if (typeof error === 'string') {
+      return {
+        errorText: error,
+        retryAfterSeconds: null,
+        isRateLimit: false,
+      };
+    }
+
+    if (error && typeof error === 'object') {
+      const objectError = error as {
+        message?: string;
+        response?: {
+          statusCode?: number;
+          body?: {
+            description?: string;
+            parameters?: { retry_after?: number };
+          };
+        };
+      };
+
+      const errorText =
+        objectError.response?.body?.description ??
+        objectError.message ??
+        'Unknown Telegram error';
+
+      const retryAfterValue = objectError.response?.body?.parameters?.retry_after;
+      const retryAfterSeconds =
+        typeof retryAfterValue === 'number' && Number.isFinite(retryAfterValue)
+          ? Math.max(0, Math.floor(retryAfterValue))
+          : null;
+
+      const isRateLimit =
+        objectError.response?.statusCode === 429 ||
+        errorText.toLowerCase().includes('too many requests');
+
+      return {
+        errorText,
+        retryAfterSeconds,
+        isRateLimit,
+      };
+    }
+
+    return {
+      errorText: 'Unknown Telegram error',
+      retryAfterSeconds: null,
+      isRateLimit: false,
+    };
+  }
+
+  private toJson(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+}

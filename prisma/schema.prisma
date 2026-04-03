@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Direction {
+  INCOMING
+  OUTGOING
+}
+
+enum MessageType {
+  TEXT
+  PHOTO
+  VIDEO
+  DOCUMENT
+  STICKER
+  AUDIO
+  VOICE
+  CONTACT
+  LOCATION
+  OTHER
+}
+
+enum DeliveryStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum BroadcastStatus {
+  PENDING
+  RUNNING
+  FINISHED
+  FAILED
+}
+
+enum BroadcastDeliveryStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+enum LogLevel {
+  INFO
+  WARN
+  ERROR
+}
+
+enum OutboxSourceType {
+  REPLY
+  BROADCAST
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+}
+
+model Admin {
+  id           Int      @id @default(autoincrement())
+  login        String   @unique @db.VarChar(100)
+  passwordHash String   @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("admins")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  telegramId   String    @unique @map("telegram_id") @db.VarChar(32)
+  username     String?   @db.VarChar(100)
+  firstName    String?   @map("first_name") @db.VarChar(100)
+  lastName     String?   @map("last_name") @db.VarChar(100)
+  languageCode String?   @map("language_code") @db.VarChar(20)
+  isBlocked    Boolean   @default(false) @map("is_blocked")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  lastSeenAt   DateTime? @map("last_seen_at")
+
+  messages            Message[]
+  outbox              Outbox[]
+  broadcastDeliveries BroadcastDelivery[]
+
+  @@index([username])
+  @@index([lastSeenAt])
+  @@map("users")
+}
+
+model Message {
+  id                Int            @id @default(autoincrement())
+  userId            Int            @map("user_id")
+  telegramMessageId Int?           @map("telegram_message_id")
+  direction         Direction
+  messageType       MessageType    @map("message_type")
+  text              String?
+  rawPayload        Json           @map("raw_payload")
+  deliveryStatus    DeliveryStatus @default(PENDING) @map("delivery_status")
+  errorText         String?        @map("error_text")
+  isRead            Boolean        @default(false) @map("is_read")
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([direction, isRead])
+  @@map("messages")
+}
+
+model Broadcast {
+  id           Int             @id @default(autoincrement())
+  title        String?
+  text         String
+  status       BroadcastStatus @default(PENDING)
+  totalTargets Int             @default(0) @map("total_targets")
+  successCount Int             @default(0) @map("success_count")
+  failedCount  Int             @default(0) @map("failed_count")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  startedAt    DateTime?       @map("started_at")
+  finishedAt   DateTime?       @map("finished_at")
+
+  deliveries BroadcastDelivery[]
+
+  @@index([createdAt])
+  @@map("broadcasts")
+}
+
+model BroadcastDelivery {
+  id          Int                     @id @default(autoincrement())
+  broadcastId Int                     @map("broadcast_id")
+  userId      Int                     @map("user_id")
+  outboxId    Int?                    @unique @map("outbox_id")
+  status      BroadcastDeliveryStatus @default(PENDING)
+  errorText   String?                 @map("error_text")
+  createdAt   DateTime                @default(now()) @map("created_at")
+
+  broadcast Broadcast @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  outbox    Outbox?   @relation(fields: [outboxId], references: [id], onDelete: SetNull)
+
+  @@index([broadcastId])
+  @@index([userId])
+  @@map("broadcast_deliveries")
+}
+
+model Outbox {
+  id                  Int             @id @default(autoincrement())
+  userId              Int             @map("user_id")
+  sourceType          OutboxSourceType @map("source_type")
+  text                String
+  status              OutboxStatus    @default(PENDING)
+  errorText           String?         @map("error_text")
+  attempts            Int             @default(0)
+  processingStartedAt DateTime?       @map("processing_started_at")
+  createdAt           DateTime        @default(now()) @map("created_at")
+  sentAt              DateTime?       @map("sent_at")
+
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries BroadcastDelivery[]
+
+  @@index([status, createdAt])
+  @@index([processingStartedAt])
+  @@index([userId, createdAt])
+  @@map("outbox")
+}
+
+model SystemLog {
+  id        Int      @id @default(autoincrement())
+  level     LogLevel @default(INFO)
+  scope     String   @db.VarChar(100)
+  message   String
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([level])
+  @@map("system_logs")
+}

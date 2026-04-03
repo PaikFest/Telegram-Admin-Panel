@@ -1,0 +1,8 @@
+{
+  "name": "opener-bot-admin",
+  "private": true,
+  "workspaces": [
+    "apps/backend",
+    "apps/frontend"
+  ]
+}
