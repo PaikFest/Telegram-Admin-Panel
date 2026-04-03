@@ -12,10 +12,14 @@ COPY apps/frontend ./apps/frontend
 ARG ADMIN_BASE_PATH
 ENV NEXT_PUBLIC_ADMIN_BASE_PATH=${ADMIN_BASE_PATH}
 
-RUN npm run build --workspace apps/frontend && npm prune --omit=dev
+RUN npm run build --workspace apps/frontend && npm prune --omit=dev \
+  && cd /app/apps/frontend \
+  && mkdir -p .next/standalone/.next \
+  && cp -R .next/static .next/standalone/.next/static \
+  && if [ -d public ]; then cp -R public .next/standalone/public; fi
 
 WORKDIR /app/apps/frontend
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start"]
+CMD ["node", ".next/standalone/server.js"]
