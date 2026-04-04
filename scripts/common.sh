@@ -370,7 +370,7 @@ ensure_env_value() {
 is_placeholder_value() {
   local value="${1:-}"
   case "${value}" in
-    ""|"change_me"|"admin"|"change_me_token"|"00000000-0000-4000-8000-000000000000"|"/change_me_token/00000000-0000-4000-8000-000000000000")
+    ""|"change_me"|"admin"|"change_me_token"|"00000000-0000-4000-8000-000000000000"|"/change_me_token/00000000-0000-4000-8000-000000000000"|"postgresql://opener:change_me@postgres:5432/opener_bot_admin?schema=public")
       return 0
       ;;
     *)
@@ -388,6 +388,43 @@ ensure_env_value_real() {
 
   if [ -z "${existing}" ] || is_placeholder_value "${existing}"; then
     set_env_value "${key}" "${value}" "${file}"
+  fi
+}
+
+build_database_url() {
+  local postgres_user="$1"
+  local postgres_password="$2"
+  local postgres_db="$3"
+  printf 'postgresql://%s:%s@postgres:5432/%s?schema=public' "${postgres_user}" "${postgres_password}" "${postgres_db}"
+}
+
+ensure_database_url_consistency() {
+  local postgres_db postgres_user postgres_password expected_database_url current_database_url
+  postgres_db="$(get_env_value "POSTGRES_DB")"
+  postgres_user="$(get_env_value "POSTGRES_USER")"
+  postgres_password="$(get_env_value "POSTGRES_PASSWORD")"
+
+  if [ -z "${postgres_db}" ] || [ -z "${postgres_user}" ] || [ -z "${postgres_password}" ]; then
+    return 0
+  fi
+
+  expected_database_url="$(build_database_url "${postgres_user}" "${postgres_password}" "${postgres_db}")"
+  current_database_url="$(get_env_value "DATABASE_URL")"
+
+  if [ -z "${current_database_url}" ] || is_placeholder_value "${current_database_url}" || [[ "${current_database_url}" == *"change_me"* ]]; then
+    set_env_value "DATABASE_URL" "${expected_database_url}"
+    return 0
+  fi
+
+  if [[ "${current_database_url}" =~ ^postgresql://([^:/?#]+):([^@/?#]*)@postgres:5432/([^?]+)\?schema=public$ ]]; then
+    local current_user current_password current_db
+    current_user="${BASH_REMATCH[1]}"
+    current_password="${BASH_REMATCH[2]}"
+    current_db="${BASH_REMATCH[3]}"
+
+    if [ "${current_user}" != "${postgres_user}" ] || [ "${current_password}" != "${postgres_password}" ] || [ "${current_db}" != "${postgres_db}" ]; then
+      set_env_value "DATABASE_URL" "${expected_database_url}"
+    fi
   fi
 }
 

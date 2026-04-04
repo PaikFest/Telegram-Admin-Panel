@@ -279,7 +279,7 @@ ensure_env_value "APP_URL" "http://${DETECTED_IP}"
 POSTGRES_DB_VALUE="$(get_env_value "POSTGRES_DB")"
 POSTGRES_USER_VALUE="$(get_env_value "POSTGRES_USER")"
 POSTGRES_PASSWORD_VALUE="$(get_env_value "POSTGRES_PASSWORD")"
-ensure_env_value "DATABASE_URL" "postgresql://${POSTGRES_USER_VALUE}:${POSTGRES_PASSWORD_VALUE}@postgres:5432/${POSTGRES_DB_VALUE}?schema=public"
+ensure_database_url_consistency
 
 chmod 600 "${ENV_FILE}"
 finish_step_ok ".env prepared."

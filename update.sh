@@ -92,9 +92,7 @@ set_env_value "ADMIN_BASE_PATH" "/${CURRENT_PATH_TOKEN}/${CURRENT_PATH_UUID}"
 POSTGRES_DB_VALUE="$(get_env_value "POSTGRES_DB")"
 POSTGRES_USER_VALUE="$(get_env_value "POSTGRES_USER")"
 POSTGRES_PASSWORD_VALUE="$(get_env_value "POSTGRES_PASSWORD")"
-if [ -n "${POSTGRES_DB_VALUE}" ] && [ -n "${POSTGRES_USER_VALUE}" ] && [ -n "${POSTGRES_PASSWORD_VALUE}" ]; then
-  ensure_env_value "DATABASE_URL" "postgresql://${POSTGRES_USER_VALUE}:${POSTGRES_PASSWORD_VALUE}@postgres:5432/${POSTGRES_DB_VALUE}?schema=public"
-fi
+ensure_database_url_consistency
 
 BOT_TOKEN_VALUE="$(get_env_value "BOT_TOKEN")"
 if [ -z "${BOT_TOKEN_VALUE}" ]; then
