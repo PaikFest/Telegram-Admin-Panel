@@ -83,12 +83,12 @@ REPO_URL="https://github.com/USER/REPO.git" BOT_TOKEN="<telegram_bot_token>" bas
 
 ## Update flow
 ```bash
-cd /opt/opener-bot-admin && git pull && bash update.sh
+cd /opt/Telegram-AdminBot-Panel && git pull && bash update.sh
 ```
 
 ## Reset admin credentials
 ```bash
-cd /opt/opener-bot-admin && bash reset-admin-password.sh
+cd /opt/Telegram-AdminBot-Panel && bash reset-admin-password.sh
 ```
 
 ## Local run (without install.sh)
@@ -122,3 +122,36 @@ docker compose up -d --build
 - On first backend start, admin account is created from `ADMIN_LOGIN`/`ADMIN_PASSWORD` if DB has no admins.
 - `install.sh` generates hidden admin path (`ADMIN_BASE_PATH`) and prints full Admin URL with login/password.
 - `install.sh` writes generated credentials to `/root/opener-bot-admin-credentials.txt` with mode `600`.
+
+## GitHub Actions CI/CD
+Workflows:
+- `.github/workflows/ci.yml`:
+  - runs on `push` and `pull_request` to `main`
+  - `npm ci`
+  - `npm run build --workspace apps/backend`
+  - `npm run build --workspace apps/frontend`
+- `.github/workflows/deploy.yml`:
+  - runs automatically after successful `CI` for `push` to `main`
+  - can also be started manually via GitHub Actions UI (`Run workflow`)
+  - deploys via SSH to VPS
+  - on server executes:
+    - `cd /opt/Telegram-AdminBot-Panel`
+    - `git fetch --all --prune`
+    - `git checkout main`
+    - `git pull --ff-only`
+    - `bash update.sh`
+
+Required GitHub Secrets:
+- `VPS_HOST`
+- `VPS_PORT`
+- `VPS_USER`
+- `VPS_SSH_PRIVATE_KEY`
+- optional: `VPS_KNOWN_HOSTS` (recommended).  
+  If missing, workflow falls back to `ssh-keyscan`.
+
+Manual deploy run:
+- open GitHub Actions -> `Deploy` -> `Run workflow`.
+
+How to confirm deploy success:
+- in `Deploy` logs, final line should be `[OK] Deploy finished successfully.`
+- `update.sh` output should show healthy services in final summary.

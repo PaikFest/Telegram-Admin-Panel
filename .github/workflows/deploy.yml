@@ -1,0 +1,94 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+
+jobs:
+  deploy:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == 'main'
+        )
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Prepare SSH key
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+      - name: Configure known_hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_PORT="${{ secrets.VPS_PORT }}"
+          if [ -z "${VPS_PORT}" ]; then
+            VPS_PORT="22"
+          fi
+          if [ -n "${{ secrets.VPS_KNOWN_HOSTS }}" ]; then
+            printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -p "${VPS_PORT}" -H "${{ secrets.VPS_HOST }}" > ~/.ssh/known_hosts
+          fi
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy on VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VPS_PORT}" ]; then
+            VPS_PORT="22"
+          fi
+          ssh -o StrictHostKeyChecking=yes -p "${VPS_PORT}" "${VPS_USER}@${VPS_HOST}" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR="/opt/Telegram-AdminBot-Panel"
+          echo "[INFO] Deploy target: ${APP_DIR}"
+
+          if [ ! -d "${APP_DIR}" ]; then
+            echo "[ERROR] ${APP_DIR} does not exist. Run install.sh on server first."
+            exit 1
+          fi
+
+          cd "${APP_DIR}"
+
+          if [ ! -d ".git" ]; then
+            echo "[ERROR] ${APP_DIR} is not a git repository."
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "[ERROR] Dirty git working tree on server. Commit/stash local changes before deploy."
+            exit 1
+          fi
+
+          echo "[INFO] Fetching latest changes..."
+          git fetch --all --prune
+          git checkout main
+          git pull --ff-only
+
+          echo "[INFO] Running update.sh..."
+          bash update.sh
+          echo "[OK] Deploy finished successfully."
+          REMOTE
