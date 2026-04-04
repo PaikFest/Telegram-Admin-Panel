@@ -14,9 +14,14 @@ ENV NEXT_PUBLIC_ADMIN_BASE_PATH=${ADMIN_BASE_PATH}
 
 RUN npm run build --workspace apps/frontend && npm prune --omit=dev \
   && cd /app/apps/frontend \
-  && mkdir -p .next/standalone/.next \
-  && cp -R .next/static .next/standalone/.next/static \
-  && if [ -d public ]; then cp -R public .next/standalone/public; fi
+  && if [ -f .next/standalone/apps/frontend/server.js ]; then \
+       cp .next/standalone/apps/frontend/server.js .next/standalone/server.js; \
+       mkdir -p .next/standalone/.next; \
+       cp -R .next/standalone/apps/frontend/.next/. .next/standalone/.next/; \
+     fi \
+  && mkdir -p .next/standalone/.next/static \
+  && if [ -d .next/static ]; then cp -R .next/static/. .next/standalone/.next/static/; fi \
+  && if [ -d public ]; then mkdir -p .next/standalone/public && cp -R public/. .next/standalone/public/; fi
 
 WORKDIR /app/apps/frontend
 
