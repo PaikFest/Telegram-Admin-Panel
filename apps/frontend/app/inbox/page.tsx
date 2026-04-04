@@ -240,7 +240,8 @@ export default function InboxPage() {
     event.preventDefault();
     if (!selectedUserId) return;
 
-    const hasText = replyText.trim().length > 0;
+    const sanitizedText = replyText.trim();
+    const hasText = sanitizedText.length > 0;
     const hasAttachments = attachments.length > 0;
     if (!hasText && !hasAttachments) return;
 
@@ -249,6 +250,20 @@ export default function InboxPage() {
     setSuccess(null);
 
     try {
+      if (hasText) {
+        const result = await apiFetch<{ success: true; outboxId: number }>(
+          `/api/inbox/conversations/${selectedUserId}/reply`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ text: sanitizedText }),
+          },
+        );
+
+        if (typeof result.outboxId !== 'number') {
+          throw new Error('Failed to queue reply');
+        }
+      }
+
       if (hasAttachments) {
         const formData = new FormData();
         for (const attachment of attachments) {
@@ -279,20 +294,6 @@ export default function InboxPage() {
             // keep fallback
           }
           throw new Error(errorMessage);
-        }
-      }
-
-      if (hasText) {
-        const result = await apiFetch<{ success: true; outboxId: number }>(
-          `/api/inbox/conversations/${selectedUserId}/reply`,
-          {
-            method: 'POST',
-            body: JSON.stringify({ text: replyText }),
-          },
-        );
-
-        if (typeof result.outboxId !== 'number') {
-          throw new Error('Failed to queue reply');
         }
       }
 
@@ -453,6 +454,7 @@ export default function InboxPage() {
                     <input
                       ref={fileInputRef}
                       type="file"
+                      name="files"
                       accept="image/*"
                       multiple
                       onChange={onFileSelect}

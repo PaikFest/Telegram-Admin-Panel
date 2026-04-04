@@ -117,7 +117,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     `;
 
     const failed = await this.prisma.$queryRaw<
-      Array<{ id: number; message_type: MessageType; file_path: string | null }>
+      Array<{ id: number; source_type: 'REPLY' | 'BROADCAST'; message_type: MessageType; file_path: string | null }>
     >`
       UPDATE "outbox"
       SET "status" = 'FAILED',
@@ -127,7 +127,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         AND "processing_started_at" IS NOT NULL
         AND "processing_started_at" < ${staleBefore}
         AND "attempts" >= ${MAX_OUTBOX_ATTEMPTS}
-      RETURNING "id", "message_type", "file_path";
+      RETURNING "id", "source_type", "message_type", "file_path";
     `;
 
     if (requeued.length === 0 && failed.length === 0) {
@@ -164,7 +164,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.refreshBroadcastStatsByOutboxIds(affectedIds);
 
     for (const job of failed) {
-      await this.cleanupUploadedFile(job.id, job.message_type, job.file_path, 'stale-failed');
+      await this.cleanupUploadedFile(job.id, job.source_type, job.message_type, job.file_path, 'stale-failed');
     }
 
     await this.logsService.warn(
@@ -357,7 +357,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       return delivery?.broadcastId ?? null;
     });
 
-    await this.cleanupUploadedFile(job.id, job.message_type, job.file_path, 'sent');
+    await this.cleanupUploadedFile(job.id, job.source_type, job.message_type, job.file_path, 'sent');
 
     if (broadcastId) {
       await this.refreshBroadcastStats(broadcastId);
@@ -453,7 +453,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       return delivery?.broadcastId ?? null;
     });
 
-    await this.cleanupUploadedFile(job.id, job.message_type, job.file_path, 'failed');
+    await this.cleanupUploadedFile(job.id, job.source_type, job.message_type, job.file_path, 'failed');
 
     if (broadcastId) {
       await this.refreshBroadcastStats(broadcastId);
@@ -595,6 +595,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
   private async cleanupUploadedFile(
     outboxId: number,
+    sourceType: 'REPLY' | 'BROADCAST',
     messageType: MessageType,
     filePath: string | null,
     reason: 'sent' | 'failed' | 'stale-failed',
@@ -604,6 +605,22 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
+      if (sourceType === 'BROADCAST') {
+        const remainingRows = await this.prisma.$queryRaw<Array<{ remaining: number }>>`
+          SELECT COUNT(*)::int AS "remaining"
+          FROM "outbox"
+          WHERE "source_type" = 'BROADCAST'
+            AND "message_type" = 'PHOTO'
+            AND "file_path" = ${filePath}
+            AND "status" IN ('PENDING', 'PROCESSING');
+        `;
+
+        const remaining = Number(remainingRows[0]?.remaining ?? 0);
+        if (remaining > 0) {
+          return;
+        }
+      }
+
       if (!existsSync(filePath)) {
         return;
       }

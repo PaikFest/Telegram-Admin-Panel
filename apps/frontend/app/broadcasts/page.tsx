@@ -1,8 +1,8 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppShell, Icon } from '../../components/AppShell';
-import { apiFetch, formatDate } from '../../lib/api';
+import { apiFetch, formatDate, withAdminBasePath } from '../../lib/api';
 import { useAuth } from '../../lib/useAuth';
 
 type BroadcastItem = {
@@ -17,6 +17,16 @@ type BroadcastItem = {
   startedAt: string | null;
   finishedAt: string | null;
 };
+
+type BroadcastAttachment = {
+  id: string;
+  file: File;
+  previewUrl: string;
+};
+
+function createAttachmentId(file: File): string {
+  return `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`;
+}
 
 function statusBadge(status: BroadcastItem['status']): string {
   switch (status) {
@@ -33,14 +43,45 @@ function statusBadge(status: BroadcastItem['status']): string {
 
 export default function BroadcastsPage() {
   const { loading } = useAuth();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
+  const [attachments, setAttachments] = useState<BroadcastAttachment[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [items, setItems] = useState<BroadcastItem[]>([]);
   const [fetching, setFetching] = useState(false);
   const [estimatedTargets, setEstimatedTargets] = useState<number | null>(null);
+
+  const resetFileInput = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const revokeAttachmentPreview = (attachment: BroadcastAttachment) => {
+    if (attachment.previewUrl) {
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+  };
+
+  const clearAttachments = useCallback(() => {
+    setAttachments((previous) => {
+      previous.forEach(revokeAttachmentPreview);
+      return [];
+    });
+    resetFileInput();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      setAttachments((previous) => {
+        previous.forEach(revokeAttachmentPreview);
+        return previous;
+      });
+    };
+  }, []);
 
   const load = async () => {
     const [broadcasts, users] = await Promise.all([
@@ -83,11 +124,46 @@ export default function BroadcastsPage() {
     };
   }, [loading]);
 
+  const removeAttachment = (id: string) => {
+    setAttachments((previous) => {
+      const target = previous.find((attachment) => attachment.id === id);
+      if (target) {
+        revokeAttachmentPreview(target);
+      }
+      return previous.filter((attachment) => attachment.id !== id);
+    });
+    resetFileInput();
+  };
+
+  const onFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) {
+      resetFileInput();
+      return;
+    }
+
+    const next = Array.from(files).map<BroadcastAttachment>((file) => ({
+      id: createAttachmentId(file),
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+
+    setAttachments((previous) => [...previous, ...next]);
+    resetFileInput();
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!text.trim()) return;
 
-    const confirmed = window.confirm('Send this message to all active users?');
+    const sanitizedText = text.trim();
+    const hasText = sanitizedText.length > 0;
+    const hasAttachments = attachments.length > 0;
+
+    if (!hasText && !hasAttachments) {
+      return;
+    }
+
+    const confirmed = window.confirm('Send this broadcast to all active users?');
     if (!confirmed) return;
 
     setSubmitting(true);
@@ -95,15 +171,54 @@ export default function BroadcastsPage() {
     setSuccess(null);
 
     try {
-      await apiFetch('/api/broadcasts', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: title.trim() || undefined,
-          text,
-        }),
-      });
+      if (hasAttachments) {
+        const formData = new FormData();
+        const sanitizedTitle = title.trim();
+
+        if (sanitizedTitle.length > 0) {
+          formData.append('title', sanitizedTitle);
+        }
+        if (hasText) {
+          formData.append('text', sanitizedText);
+        }
+
+        for (const attachment of attachments) {
+          formData.append('files', attachment.file);
+        }
+
+        const response = await fetch(withAdminBasePath('/api/broadcasts/media'), {
+          method: 'POST',
+          body: formData,
+          credentials: 'include',
+        });
+
+        if (!response.ok) {
+          let errorMessage = `Request failed with status ${response.status}`;
+          try {
+            const payload = (await response.json()) as { message?: string | string[] };
+            if (Array.isArray(payload.message)) {
+              errorMessage = payload.message.join(', ');
+            } else if (typeof payload.message === 'string') {
+              errorMessage = payload.message;
+            }
+          } catch {
+            // keep fallback
+          }
+          throw new Error(errorMessage);
+        }
+      } else {
+        await apiFetch('/api/broadcasts', {
+          method: 'POST',
+          body: JSON.stringify({
+            title: title.trim() || undefined,
+            text: sanitizedText,
+          }),
+        });
+      }
+
       setTitle('');
       setText('');
+      clearAttachments();
       setSuccess('Broadcast queued successfully');
       await load();
     } catch (err) {
@@ -150,20 +265,65 @@ export default function BroadcastsPage() {
 
             <div>
               <label className="field-label" htmlFor="broadcast-text">
-                Message *
+                Message (Optional)
               </label>
               <textarea
                 id="broadcast-text"
-                placeholder="Enter the message to send to all users..."
+                placeholder="Enter text for broadcast (optional if images are attached)..."
                 value={text}
                 onChange={(event) => setText(event.target.value)}
                 maxLength={4000}
-                required
               />
             </div>
 
+            <div style={{ marginTop: 12 }}>
+              <label className="field-label">Images (Optional)</label>
+              <div className="button-row">
+                <label className="button-secondary file-input broadcast-attach-button">
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                    <Icon name="paperclip" />
+                    Attach Images
+                  </span>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={onFileSelect}
+                    disabled={submitting}
+                  />
+                </label>
+                <span className="subtle">
+                  {attachments.length > 0 ? `${attachments.length} selected` : 'No images selected'}
+                </span>
+              </div>
+            </div>
+
+            {attachments.length > 0 ? (
+              <div className="attachment-tray">
+                <div className="attachment-grid">
+                  {attachments.map((attachment) => (
+                    <div key={attachment.id} className="attachment-tile">
+                      <img src={attachment.previewUrl} alt={attachment.file.name} className="attachment-thumb" />
+                      <button
+                        type="button"
+                        className="attachment-remove attachment-remove-floating"
+                        onClick={() => removeAttachment(attachment.id)}
+                        disabled={submitting}
+                      >
+                        <Icon name="close" />
+                      </button>
+                      <div className="attachment-name" title={attachment.file.name}>
+                        {attachment.file.name}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <div className="button-row" style={{ marginTop: 14 }}>
-              <button className="button-primary" type="submit" disabled={submitting || !text.trim()}>
+              <button className="button-primary" type="submit" disabled={submitting || (!text.trim() && attachments.length === 0)}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
                   <Icon name="broadcasts" />
                   {submitting ? 'Sending...' : 'Send Broadcast'}
@@ -185,7 +345,7 @@ export default function BroadcastsPage() {
                   <th>ID</th>
                   <th>Title</th>
                   <th>Status</th>
-                  <th>Targets</th>
+                  <th>Jobs</th>
                   <th>Success</th>
                   <th>Failed</th>
                   <th>Created</th>

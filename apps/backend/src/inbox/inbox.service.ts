@@ -4,6 +4,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Direction, MessageType, OutboxSourceType, Prisma } from '@prisma/client';
+import { existsSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -144,13 +146,17 @@ export class InboxService {
       },
     });
 
-    await this.logsService.info(
-      'outbox',
-      `Reply queued for userId=${userId}`,
-      {
-        outboxId: job.id,
-      } as Prisma.InputJsonValue,
-    );
+    try {
+      await this.logsService.info(
+        'outbox',
+        `Reply queued for userId=${userId}`,
+        {
+          outboxId: job.id,
+        } as Prisma.InputJsonValue,
+      );
+    } catch {
+      // Do not fail successful queueing because logging failed.
+    }
 
     return { success: true, outboxId: job.id };
   }
@@ -173,6 +179,7 @@ export class InboxService {
       normalizedCaption !== null &&
       normalizedCaption.length > MAX_TELEGRAM_CAPTION_LENGTH
     ) {
+      await this.cleanupStagedFiles(files);
       throw new BadRequestException(
         `Caption is too long (max ${MAX_TELEGRAM_CAPTION_LENGTH} characters)`,
       );
@@ -184,42 +191,60 @@ export class InboxService {
     });
 
     if (!user) {
+      await this.cleanupStagedFiles(files);
       throw new NotFoundException('User not found');
     }
 
-    const jobs = await this.prisma.$transaction(async (tx) => {
-      const created: number[] = [];
+    let jobs: number[];
+    try {
+      jobs = await this.prisma.$transaction(async (tx) => {
+        const created: number[] = [];
 
-      for (let index = 0; index < files.length; index += 1) {
-        const file = files[index];
-        const job = await tx.outbox.create({
-          data: {
-            userId,
-            sourceType: OutboxSourceType.REPLY,
-            messageType: MessageType.PHOTO,
-            text: null,
-            caption: index === 0 ? normalizedCaption : null,
-            filePath: file.path,
-            mimeType: sanitizeOptionalPlainText(file.mimetype),
-            originalFileName: sanitizeOptionalPlainText(file.originalname),
-          },
-          select: {
-            id: true,
-          },
-        });
-        created.push(job.id);
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          const job = await tx.outbox.create({
+            data: {
+              userId,
+              sourceType: OutboxSourceType.REPLY,
+              messageType: MessageType.PHOTO,
+              text: null,
+              caption: index === 0 ? normalizedCaption : null,
+              filePath: file.path,
+              mimeType: sanitizeOptionalPlainText(file.mimetype),
+              originalFileName: sanitizeOptionalPlainText(file.originalname),
+            },
+            select: {
+              id: true,
+            },
+          });
+          created.push(job.id);
+        }
+
+        return created;
+      });
+    } catch (error) {
+      await this.cleanupStagedFiles(files);
+      throw error;
+    }
+
+    try {
+      await this.logsService.info(
+        'outbox',
+        `Photo reply queued for userId=${userId}, files=${files.length}`,
+        {
+          outboxIds: jobs,
+        } as Prisma.InputJsonValue,
+      );
+    } catch {
+      try {
+        await this.logsService.warn(
+          'inbox',
+          `Photo reply queued but failed to write info log for userId=${userId}`,
+        );
+      } catch {
+        // Do not fail successful queueing because logging failed.
       }
-
-      return created;
-    });
-
-    await this.logsService.info(
-      'outbox',
-      `Photo reply queued for userId=${userId}, files=${files.length}`,
-      {
-        outboxIds: jobs,
-      } as Prisma.InputJsonValue,
-    );
+    }
 
     return { success: true, outboxIds: jobs };
   }
@@ -238,5 +263,33 @@ export class InboxService {
         { lastName: { contains: term, mode: 'insensitive' } },
       ],
     };
+  }
+
+  private async cleanupStagedFiles(
+    files: Array<{
+      path: string;
+    }>,
+  ): Promise<void> {
+    for (const file of files) {
+      try {
+        if (!file.path || !existsSync(file.path)) {
+          continue;
+        }
+        await unlink(file.path);
+      } catch (error) {
+        try {
+          await this.logsService.warn(
+            'inbox',
+            'Failed to cleanup staged inbox image after queueing error',
+            {
+              filePath: file.path,
+              error: String(error),
+            } as Prisma.InputJsonValue,
+          );
+        } catch {
+          // Best-effort cleanup logging.
+        }
+      }
+    }
   }
 }

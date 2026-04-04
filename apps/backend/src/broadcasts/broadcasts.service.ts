@@ -1,8 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Broadcast, BroadcastStatus, Prisma } from '@prisma/client';
+import { existsSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreateBroadcastMediaDto } from './dto/create-broadcast-media.dto';
 import { CreateBroadcastDto } from './dto/create-broadcast.dto';
 
 @Injectable()
@@ -25,8 +28,9 @@ export class BroadcastsService {
         data: {
           title,
           text,
-          status: BroadcastStatus.PENDING,
+          status: totalTargets === 0 ? BroadcastStatus.FINISHED : BroadcastStatus.PENDING,
           totalTargets,
+          finishedAt: totalTargets === 0 ? new Date() : null,
         },
       });
 
@@ -48,13 +52,152 @@ export class BroadcastsService {
       return created;
     });
 
-    await this.logsService.info(
-      'broadcast',
-      `Broadcast queued id=${broadcast.id}`,
-      {
-        totalTargets: broadcast.totalTargets,
-      } as Prisma.InputJsonValue,
-    );
+    try {
+      await this.logsService.info(
+        'broadcast',
+        `Broadcast queued id=${broadcast.id}`,
+        {
+          totalTargets: broadcast.totalTargets,
+        } as Prisma.InputJsonValue,
+      );
+    } catch {
+      // Do not fail successful queueing because logging failed.
+    }
+
+    return broadcast;
+  }
+
+  async createBroadcastWithMedia(
+    dto: CreateBroadcastMediaDto,
+    files: Array<{
+      path: string;
+      mimetype: string;
+      originalname: string;
+    }>,
+  ): Promise<Broadcast> {
+    const text = sanitizeOptionalPlainText(dto.text);
+    const title = sanitizeOptionalPlainText(dto.title);
+
+    if (!text && files.length === 0) {
+      throw new BadRequestException('Provide broadcast text and/or at least one image');
+    }
+
+    let result: {
+      created: Broadcast;
+      hasQueuedJobs: boolean;
+    };
+
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        const activeUsers = await tx.user.count({
+          where: { isBlocked: false },
+        });
+
+        const jobsPerUser = (text ? 1 : 0) + files.length;
+        const totalTargets = activeUsers * jobsPerUser;
+
+        const created = await tx.broadcast.create({
+          data: {
+            title,
+            text: text ?? '',
+            status: totalTargets === 0 ? BroadcastStatus.FINISHED : BroadcastStatus.PENDING,
+            totalTargets,
+            finishedAt: totalTargets === 0 ? new Date() : null,
+          },
+        });
+
+        if (activeUsers > 0 && jobsPerUser > 0) {
+          if (text) {
+            await tx.$executeRaw`
+              WITH inserted_outbox AS (
+                INSERT INTO "outbox" ("user_id", "source_type", "message_type", "text", "status", "attempts", "created_at")
+                SELECT "id", 'BROADCAST'::"OutboxSourceType", 'TEXT'::"MessageType", ${text}, 'PENDING'::"OutboxStatus", 0, NOW()
+                FROM "users"
+                WHERE "is_blocked" = false
+                RETURNING "id", "user_id"
+              )
+              INSERT INTO "broadcast_deliveries" ("broadcast_id", "user_id", "outbox_id", "status", "created_at")
+              SELECT ${created.id}, io."user_id", io."id", 'PENDING'::"BroadcastDeliveryStatus", NOW()
+              FROM inserted_outbox io;
+            `;
+          }
+
+          for (const file of files) {
+            await tx.$executeRaw`
+              WITH inserted_outbox AS (
+                INSERT INTO "outbox" (
+                  "user_id",
+                  "source_type",
+                  "message_type",
+                  "text",
+                  "caption",
+                  "file_path",
+                  "mime_type",
+                  "original_file_name",
+                  "status",
+                  "attempts",
+                  "created_at"
+                )
+                SELECT
+                  "id",
+                  'BROADCAST'::"OutboxSourceType",
+                  'PHOTO'::"MessageType",
+                  NULL,
+                  NULL,
+                  ${file.path},
+                  ${sanitizeOptionalPlainText(file.mimetype)},
+                  ${sanitizeOptionalPlainText(file.originalname)},
+                  'PENDING'::"OutboxStatus",
+                  0,
+                  NOW()
+                FROM "users"
+                WHERE "is_blocked" = false
+                RETURNING "id", "user_id"
+              )
+              INSERT INTO "broadcast_deliveries" ("broadcast_id", "user_id", "outbox_id", "status", "created_at")
+              SELECT ${created.id}, io."user_id", io."id", 'PENDING'::"BroadcastDeliveryStatus", NOW()
+              FROM inserted_outbox io;
+            `;
+          }
+        }
+
+        return {
+          created,
+          hasQueuedJobs: activeUsers > 0 && jobsPerUser > 0,
+        };
+      });
+
+    } catch (error) {
+      await this.cleanupStagedFiles(files);
+      throw error;
+    }
+
+    const broadcast = result.created;
+
+    if (!result.hasQueuedJobs && files.length > 0) {
+      await this.cleanupStagedFiles(files);
+    }
+
+    try {
+      await this.logsService.info(
+        'broadcast',
+        `Broadcast with media queued id=${broadcast.id}`,
+        {
+          totalTargets: broadcast.totalTargets,
+          hasText: Boolean(text),
+          mediaCount: files.length,
+        } as Prisma.InputJsonValue,
+      );
+    } catch {
+      try {
+        await this.logsService.warn(
+          'broadcast',
+          `Broadcast queued id=${broadcast.id} but failed to write info log`,
+        );
+      } catch {
+        // Do not fail successful queueing because logging failed.
+      }
+    }
 
     return broadcast;
   }
@@ -92,5 +235,33 @@ export class BroadcastsService {
         },
       },
     });
+  }
+
+  private async cleanupStagedFiles(
+    files: Array<{
+      path: string;
+    }>,
+  ): Promise<void> {
+    for (const file of files) {
+      try {
+        if (!file.path || !existsSync(file.path)) {
+          continue;
+        }
+        await unlink(file.path);
+      } catch (error) {
+        try {
+          await this.logsService.warn(
+            'broadcast',
+            'Failed to cleanup staged broadcast image after queueing error',
+            {
+              filePath: file.path,
+              error: String(error),
+            } as Prisma.InputJsonValue,
+          );
+        } catch {
+          // Best-effort cleanup logging.
+        }
+      }
+    }
   }
 }
