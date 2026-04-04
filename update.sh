@@ -1,32 +1,140 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${EUID}" -ne 0 ]; then
-  echo "Run as root"
-  exit 1
+APP_DIR="${APP_DIR:-/opt/Telegram-AdminBot-Panel}"
+COMMON_SH="${APP_DIR}/scripts/common.sh"
+
+if [ ! -f "${COMMON_SH}" ]; then
+  COMMON_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/common.sh"
 fi
 
-APP_DIR="/opt/Telegram-AdminBot-Panel"
+# shellcheck disable=SC1090
+source "${COMMON_SH}"
+init_ui
 
-if [ ! -d "$APP_DIR" ]; then
-  echo "$APP_DIR not found"
-  exit 1
+banner "Updater"
+require_root
+ensure_app_dir
+
+section "Checking project state"
+[ -d "${APP_DIR}/.git" ] || die "Git repository not found in ${APP_DIR}."
+[ -f "${ENV_FILE}" ] || die ".env not found in ${APP_DIR}."
+
+SKIP_GIT_PULL=0
+if [ -n "$(git -C "${APP_DIR}" status --porcelain)" ]; then
+  if [ "${ALLOW_DIRTY_UPDATE:-0}" != "1" ]; then
+    die "Local changes detected. Commit/stash them first or set ALLOW_DIRTY_UPDATE=1."
+  fi
+  SKIP_GIT_PULL=1
+  log_warn "Dirty working tree detected. Proceeding without git pull because ALLOW_DIRTY_UPDATE=1."
 fi
 
-cd "$APP_DIR"
-
-if [ ! -f .env ]; then
-  echo ".env not found in $APP_DIR"
-  exit 1
+section "Fetching updates"
+if [ "${SKIP_GIT_PULL}" -eq 0 ]; then
+  git -C "${APP_DIR}" fetch --all --prune >/dev/null
 fi
 
-chmod +x scripts/wait-for-health.sh
+if [ "${SKIP_GIT_PULL}" -eq 1 ]; then
+  log_warn "Skipped git sync due to dirty tree override."
+else
+  CURRENT_BRANCH="$(git -C "${APP_DIR}" rev-parse --abbrev-ref HEAD)"
+  REMOTE_REF="origin/${CURRENT_BRANCH}"
+  if ! git -C "${APP_DIR}" rev-parse --verify "${REMOTE_REF}" >/dev/null 2>&1; then
+    REMOTE_REF="origin/main"
+  fi
 
-docker compose up -d --build
+  LOCAL_SHA="$(git -C "${APP_DIR}" rev-parse HEAD)"
+  REMOTE_SHA="$(git -C "${APP_DIR}" rev-parse "${REMOTE_REF}")"
 
-bash scripts/wait-for-health.sh postgres 240
-bash scripts/wait-for-health.sh backend 300
-bash scripts/wait-for-health.sh frontend 300
-bash scripts/wait-for-health.sh caddy 180
+  if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ]; then
+    log_info "Already up to date (${CURRENT_BRANCH})."
+  else
+    if git -C "${APP_DIR}" pull --ff-only >/dev/null; then
+      log_ok "Repository updated."
+    else
+      die "Failed to pull updates (non fast-forward). Resolve git state manually."
+    fi
+  fi
+fi
 
-echo "Update finished"
+section "Ensuring environment completeness"
+ensure_env_file
+ensure_env_value "NODE_ENV" "production"
+
+CURRENT_BASE_PATH="$(normalize_base_path "$(get_env_value "ADMIN_BASE_PATH")")"
+CURRENT_PATH_TOKEN="$(get_env_value "ADMIN_PATH_TOKEN")"
+CURRENT_PATH_UUID="$(get_env_value "ADMIN_PATH_UUID")"
+
+if [ -n "${CURRENT_BASE_PATH}" ]; then
+  PATH_BODY="${CURRENT_BASE_PATH#/}"
+  CURRENT_PATH_TOKEN="${PATH_BODY%%/*}"
+  CURRENT_PATH_UUID="${PATH_BODY#*/}"
+fi
+
+if [ -z "${CURRENT_PATH_TOKEN}" ]; then
+  CURRENT_PATH_TOKEN="$(generate_alnum 16)"
+fi
+if [ -z "${CURRENT_PATH_UUID}" ]; then
+  CURRENT_PATH_UUID="$(cat /proc/sys/kernel/random/uuid)"
+fi
+
+set_env_value "ADMIN_PATH_TOKEN" "${CURRENT_PATH_TOKEN}"
+set_env_value "ADMIN_PATH_UUID" "${CURRENT_PATH_UUID}"
+set_env_value "ADMIN_BASE_PATH" "/${CURRENT_PATH_TOKEN}/${CURRENT_PATH_UUID}"
+
+POSTGRES_DB_VALUE="$(get_env_value "POSTGRES_DB")"
+POSTGRES_USER_VALUE="$(get_env_value "POSTGRES_USER")"
+POSTGRES_PASSWORD_VALUE="$(get_env_value "POSTGRES_PASSWORD")"
+if [ -n "${POSTGRES_DB_VALUE}" ] && [ -n "${POSTGRES_USER_VALUE}" ] && [ -n "${POSTGRES_PASSWORD_VALUE}" ]; then
+  ensure_env_value "DATABASE_URL" "postgresql://${POSTGRES_USER_VALUE}:${POSTGRES_PASSWORD_VALUE}@postgres:5432/${POSTGRES_DB_VALUE}?schema=public"
+fi
+
+BOT_TOKEN_VALUE="$(get_env_value "BOT_TOKEN")"
+if [ -z "${BOT_TOKEN_VALUE}" ]; then
+  prompt_secret "Enter BOT_TOKEN: " BOT_TOKEN_VALUE
+  [ -n "${BOT_TOKEN_VALUE}" ] || die "BOT_TOKEN is required."
+  set_env_value "BOT_TOKEN" "${BOT_TOKEN_VALUE}"
+fi
+
+chmod 600 "${ENV_FILE}"
+validate_bot_token "${BOT_TOKEN_VALUE}"
+log_ok "Telegram bot token validated for @${BOT_USERNAME}."
+
+DETECTED_IP="$(detect_public_ip)"
+if [ -n "${DETECTED_IP}" ]; then
+  ensure_app_url_consistency "${DETECTED_IP}"
+fi
+chmod 600 "${ENV_FILE}"
+
+section "Rebuilding and restarting services"
+if compose_up_build; then
+  log_ok "Services restarted."
+else
+  die "Failed to rebuild/restart services."
+fi
+
+section "Waiting for health checks"
+wait_for_service_health "postgres" 240
+wait_for_service_health "backend" 300
+wait_for_service_health "frontend" 300
+wait_for_service_health "caddy" 180
+
+section "Final summary"
+ADMIN_URL="$(build_admin_url)"
+if [ -z "${ADMIN_URL}" ]; then
+  ADMIN_BASE_PATH_VALUE="$(normalize_base_path "$(get_env_value "ADMIN_BASE_PATH")")"
+  APP_URL_VALUE="$(get_env_value "APP_URL")"
+  ADMIN_URL="${APP_URL_VALUE}${ADMIN_BASE_PATH_VALUE}/login"
+fi
+
+ADMIN_LOGIN_VALUE="$(get_env_value "ADMIN_LOGIN")"
+ADMIN_PASSWORD_VALUE="$(get_env_value "ADMIN_PASSWORD")"
+SERVER_IP="$(detect_public_ip)"
+if [ -z "${SERVER_IP}" ]; then
+  SERVER_IP="unknown"
+fi
+
+write_credentials_file "${ADMIN_URL}" "${ADMIN_LOGIN_VALUE}" "${ADMIN_PASSWORD_VALUE}" "${BOT_DISPLAY_NAME}" "${BOT_USERNAME}" "${SERVER_IP}"
+print_summary_block "${ADMIN_URL}" "${ADMIN_LOGIN_VALUE}" "${ADMIN_PASSWORD_VALUE}" "${CREDENTIALS_FILE}" "${BOT_DISPLAY_NAME}" "${BOT_USERNAME}" "${SERVER_IP}"
+
+log_ok "Update completed."

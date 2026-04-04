@@ -1,27 +1,45 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${EUID}" -ne 0 ]; then
-  echo "Run as root"
-  exit 1
+APP_DIR="${APP_DIR:-/opt/Telegram-AdminBot-Panel}"
+COMMON_SH="${APP_DIR}/scripts/common.sh"
+
+if [ ! -f "${COMMON_SH}" ]; then
+  COMMON_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/common.sh"
 fi
 
-APP_DIR="/opt/Telegram-AdminBot-Panel"
+# shellcheck disable=SC1090
+source "${COMMON_SH}"
+init_ui
 
-if [ "${CONFIRM_UNINSTALL:-}" != "YES" ]; then
-  read -r -p "Type DELETE to uninstall Opener Bot Admin: " CONFIRM
-  if [ "$CONFIRM" != "DELETE" ]; then
-    echo "Cancelled"
-    exit 1
+banner "Uninstaller"
+require_root
+
+section "Confirmation"
+if [ "${CONFIRM_UNINSTALL:-}" = "YES" ]; then
+  log_warn "CONFIRM_UNINSTALL=YES detected. Skipping prompt."
+else
+  if ! confirm_action "This will remove ${PRODUCT_NAME}, containers, and data volumes. Continue?"; then
+    die "Uninstall cancelled."
   fi
 fi
 
-if [ -d "$APP_DIR" ]; then
-  cd "$APP_DIR"
-  docker compose down -v --remove-orphans || true
+section "Stopping and removing services"
+if [ -d "${APP_DIR}" ] && [ -f "${APP_DIR}/docker-compose.yml" ]; then
+  if compose down -v --remove-orphans >/dev/null 2>&1; then
+    log_ok "Containers and volumes removed."
+  else
+    log_warn "Failed to fully remove containers/volumes. Continuing cleanup."
+  fi
+else
+  log_warn "Project directory not found. Skipping docker compose teardown."
 fi
 
-rm -rf "$APP_DIR"
-rm -f /root/opener-bot-admin-credentials.txt
+section "Removing files"
+rm -rf "${APP_DIR}"
+rm -f "${CREDENTIALS_FILE}"
+log_ok "Application directory removed."
+log_ok "Credentials file removed."
 
-echo "Opener Bot Admin uninstalled"
+section "Done"
+log_ok "${PRODUCT_NAME} was successfully uninstalled."

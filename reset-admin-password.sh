@@ -1,77 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${EUID}" -ne 0 ]; then
-  echo "Run as root"
-  exit 1
+APP_DIR="${APP_DIR:-/opt/Telegram-AdminBot-Panel}"
+COMMON_SH="${APP_DIR}/scripts/common.sh"
+
+if [ ! -f "${COMMON_SH}" ]; then
+  COMMON_SH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/scripts/common.sh"
 fi
 
-APP_DIR="/opt/Telegram-AdminBot-Panel"
+# shellcheck disable=SC1090
+source "${COMMON_SH}"
+init_ui
 
-if [ ! -d "$APP_DIR" ]; then
-  echo "$APP_DIR not found"
-  exit 1
+banner "Reset Admin Password"
+require_root
+ensure_app_dir
+[ -f "${ENV_FILE}" ] || die ".env not found in ${APP_DIR}."
+
+section "Preparing new credentials"
+NEW_LOGIN="${1:-admin_$(generate_alnum 6)}"
+NEW_PASSWORD="${2:-$(generate_alnum 20)}"
+
+set_env_value "ADMIN_LOGIN" "${NEW_LOGIN}"
+set_env_value "ADMIN_PASSWORD" "${NEW_PASSWORD}"
+chmod 600 "${ENV_FILE}"
+log_ok ".env updated with new admin credentials."
+
+section "Applying credentials in backend"
+if ! compose_up_services backend; then
+  die "Failed to start backend container."
+fi
+wait_for_service_health "backend" 240
+
+if compose exec -T backend node dist/tools/reset-admin-password.js "${NEW_LOGIN}" "${NEW_PASSWORD}" >/dev/null; then
+  log_ok "Backend admin credentials updated."
+else
+  die "Failed to update admin credentials inside backend container."
 fi
 
-cd "$APP_DIR"
-
-if [ ! -f .env ]; then
-  echo ".env not found"
-  exit 1
+section "Final summary"
+ADMIN_URL="$(build_admin_url)"
+if [ -z "${ADMIN_URL}" ]; then
+  ADMIN_URL="(unknown) - check APP_URL and ADMIN_BASE_PATH in .env"
 fi
 
-NEW_LOGIN="${1:-admin_$(openssl rand -hex 3)}"
-NEW_PASSWORD="${2:-$(openssl rand -base64 36 | tr -dc 'A-Za-z0-9' | head -c 20)}"
-
-update_env() {
-  local key="$1"
-  local value="$2"
-  if grep -q "^${key}=" .env; then
-    sed -i "s|^${key}=.*|${key}=${value}|" .env
-  else
-    echo "${key}=${value}" >> .env
+BOT_NAME="Unknown"
+BOT_USER="unknown"
+BOT_TOKEN_VALUE="$(get_env_value "BOT_TOKEN")"
+if [ -n "${BOT_TOKEN_VALUE}" ]; then
+  if validate_bot_token_safe "${BOT_TOKEN_VALUE}"; then
+    BOT_NAME="${BOT_DISPLAY_NAME}"
+    BOT_USER="${BOT_USERNAME}"
   fi
-}
-
-update_env "ADMIN_LOGIN" "$NEW_LOGIN"
-update_env "ADMIN_PASSWORD" "$NEW_PASSWORD"
-
-get_env_value() {
-  local key="$1"
-  local value
-  value="$(grep -E "^${key}=" .env | head -n 1 | cut -d '=' -f2- || true)"
-  printf '%s' "$value"
-}
-
-APP_URL_VALUE="$(get_env_value APP_URL)"
-ADMIN_BASE_PATH_VALUE="$(get_env_value ADMIN_BASE_PATH)"
-if [ -n "$ADMIN_BASE_PATH_VALUE" ] && [[ "$ADMIN_BASE_PATH_VALUE" != /* ]]; then
-  ADMIN_BASE_PATH_VALUE="/${ADMIN_BASE_PATH_VALUE}"
 fi
 
-ADMIN_URL=""
-if [ -n "$APP_URL_VALUE" ] && [ -n "$ADMIN_BASE_PATH_VALUE" ]; then
-  ADMIN_URL="${APP_URL_VALUE}${ADMIN_BASE_PATH_VALUE}/login"
+SERVER_IP="$(detect_public_ip)"
+if [ -z "${SERVER_IP}" ]; then
+  SERVER_IP="unknown"
 fi
 
-chmod 600 .env
+write_credentials_file "${ADMIN_URL}" "${NEW_LOGIN}" "${NEW_PASSWORD}" "${BOT_NAME}" "${BOT_USER}" "${SERVER_IP}"
+print_summary_block "${ADMIN_URL}" "${NEW_LOGIN}" "${NEW_PASSWORD}" "${CREDENTIALS_FILE}" "${BOT_NAME}" "${BOT_USER}" "${SERVER_IP}"
 
-docker compose up -d backend
-bash scripts/wait-for-health.sh backend 240
-
-docker compose exec -T backend node dist/tools/reset-admin-password.js "$NEW_LOGIN" "$NEW_PASSWORD"
-
-cat > /root/opener-bot-admin-credentials.txt <<EOF
-Opener Bot Admin
-Updated at: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-Admin URL: ${ADMIN_URL}
-Login: ${NEW_LOGIN}
-Password: ${NEW_PASSWORD}
-EOF
-chmod 600 /root/opener-bot-admin-credentials.txt
-
-echo "Admin credentials reset"
-echo "Admin URL: ${ADMIN_URL}"
-echo "Login: ${NEW_LOGIN}"
-echo "Password: ${NEW_PASSWORD}"
-echo "Credentials file: /root/opener-bot-admin-credentials.txt"
+log_ok "Admin credentials reset completed."
