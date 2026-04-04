@@ -48,6 +48,8 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV}
       NEXT_PUBLIC_ADMIN_BASE_PATH: ${ADMIN_BASE_PATH}
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
     depends_on:
       backend:
         condition: service_healthy
