@@ -125,20 +125,20 @@ require_supported_os() {
 
 install_system_deps() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y
-  apt-get install -y ca-certificates curl git gnupg lsb-release openssl python3
+  apt-get update -y >/dev/null 2>&1 || boot_die "Failed to run apt-get update."
+  apt-get install -y ca-certificates curl git gnupg lsb-release openssl python3 >/dev/null 2>&1 || boot_die "Failed to install required system packages."
 }
 
 install_docker_if_needed() {
   if ! command -v docker >/dev/null 2>&1; then
     boot_info "Docker not found. Installing Docker..."
-    curl -fL --progress-bar https://get.docker.com | sh
+    curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 || boot_die "Failed to install Docker."
     boot_ok "Docker installed."
   else
     boot_ok "Docker already installed."
   fi
 
-  apt-get install -y docker-compose-plugin
+  apt-get install -y docker-compose-plugin >/dev/null 2>&1 || boot_die "Failed to install docker compose plugin."
   systemctl enable docker >/dev/null 2>&1 || true
   systemctl start docker >/dev/null 2>&1 || true
 }
@@ -154,8 +154,8 @@ sync_repository() {
       return 0
     fi
 
-    git -C "${APP_DIR}" fetch --all --prune --progress
-    if ! git -C "${APP_DIR}" pull --ff-only --progress; then
+    git -C "${APP_DIR}" fetch --all --prune
+    if ! git -C "${APP_DIR}" pull --ff-only; then
       boot_die "Failed to update repository (non fast-forward). Resolve git state manually."
     fi
     boot_ok "Repository updated."
@@ -170,7 +170,7 @@ sync_repository() {
     fi
   fi
 
-  git clone --progress --branch "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
+  git clone --branch "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
   boot_ok "Repository cloned."
 }
 
@@ -236,10 +236,10 @@ POSTGRES_USER_DEFAULT="opener"
 
 ensure_env_value "POSTGRES_DB" "${POSTGRES_DB_DEFAULT}"
 ensure_env_value "POSTGRES_USER" "${POSTGRES_USER_DEFAULT}"
-ensure_env_value "POSTGRES_PASSWORD" "$(generate_alnum 24)"
-ensure_env_value "SESSION_SECRET" "$(generate_alnum 48)"
-ensure_env_value "ADMIN_LOGIN" "admin_$(generate_alnum 6)"
-ensure_env_value "ADMIN_PASSWORD" "$(generate_alnum 20)"
+ensure_env_value_real "POSTGRES_PASSWORD" "$(generate_alnum 24)"
+ensure_env_value_real "SESSION_SECRET" "$(generate_alnum 48)"
+ensure_env_value_real "ADMIN_LOGIN" "admin_$(generate_alnum 6)"
+ensure_env_value_real "ADMIN_PASSWORD" "$(generate_alnum 20)"
 ensure_env_value "NODE_ENV" "production"
 
 CURRENT_BASE_PATH="$(normalize_base_path "$(get_env_value "ADMIN_BASE_PATH")")"
@@ -252,11 +252,11 @@ if [ -n "${CURRENT_BASE_PATH}" ]; then
   CURRENT_PATH_UUID="${PATH_BODY#*/}"
 fi
 
-if [ -z "${CURRENT_PATH_TOKEN}" ]; then
+if [ -z "${CURRENT_PATH_TOKEN}" ] || is_placeholder_value "${CURRENT_PATH_TOKEN}"; then
   CURRENT_PATH_TOKEN="$(generate_alnum 16)"
 fi
 
-if [ -z "${CURRENT_PATH_UUID}" ]; then
+if [ -z "${CURRENT_PATH_UUID}" ] || is_placeholder_value "${CURRENT_PATH_UUID}"; then
   CURRENT_PATH_UUID="$(cat /proc/sys/kernel/random/uuid)"
 fi
 
@@ -286,7 +286,7 @@ finish_step_ok ".env prepared."
 
 start_step 5 "${INSTALL_TOTAL_STEPS}" "Building containers"
 log_info "This step may take several minutes."
-compose_up_build || die "Failed to start containers. Check docker logs."
+run_step_command "Building and starting containers" compose_up_build || die "Failed to start containers. Check docker logs."
 finish_step_ok "Containers built and started."
 
 start_step 6 "${INSTALL_TOTAL_STEPS}" "Waiting for health checks"

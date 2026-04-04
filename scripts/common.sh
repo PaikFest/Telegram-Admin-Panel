@@ -367,6 +367,30 @@ ensure_env_value() {
   fi
 }
 
+is_placeholder_value() {
+  local value="${1:-}"
+  case "${value}" in
+    ""|"change_me"|"admin"|"change_me_token"|"00000000-0000-4000-8000-000000000000"|"/change_me_token/00000000-0000-4000-8000-000000000000")
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+ensure_env_value_real() {
+  local key="$1"
+  local value="$2"
+  local file="${3:-${ENV_FILE}}"
+  local existing
+  existing="$(get_env_value "${key}" "${file}")"
+
+  if [ -z "${existing}" ] || is_placeholder_value "${existing}"; then
+    set_env_value "${key}" "${value}" "${file}"
+  fi
+}
+
 prompt_secret() {
   local label="$1"
   local var_name="$2"
@@ -569,11 +593,20 @@ compose() {
 }
 
 compose_up_build() {
-  if (cd "${APP_DIR}" && BUILDKIT_PROGRESS=plain docker compose up -d --build); then
+  local tmp_log
+  tmp_log="$(mktemp)"
+
+  if (cd "${APP_DIR}" && docker compose up -d --build >"${tmp_log}" 2>&1); then
+    rm -f "${tmp_log}"
     return 0
   fi
 
   log_error "docker compose up -d --build failed."
+  if [ -s "${tmp_log}" ]; then
+    log_info "Last 120 lines from compose output:"
+    tail -n 120 "${tmp_log}" || true
+  fi
+  rm -f "${tmp_log}"
   compose ps || true
   return 1
 }

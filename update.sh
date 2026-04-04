@@ -33,7 +33,7 @@ finish_step_ok "Project state validated."
 
 start_step 2 5 "Fetching updates"
 if [ "${SKIP_GIT_PULL}" -eq 0 ]; then
-  git -C "${APP_DIR}" fetch --all --prune --progress
+  git -C "${APP_DIR}" fetch --all --prune
 fi
 
 if [ "${SKIP_GIT_PULL}" -eq 1 ]; then
@@ -51,7 +51,7 @@ else
   if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ]; then
     log_info "Already up to date (${CURRENT_BRANCH})."
   else
-    if git -C "${APP_DIR}" pull --ff-only --progress; then
+    if git -C "${APP_DIR}" pull --ff-only; then
       log_ok "Repository updated."
     else
       die "Failed to pull updates (non fast-forward). Resolve git state manually."
@@ -78,10 +78,10 @@ if [ -n "${CURRENT_BASE_PATH}" ]; then
   CURRENT_PATH_UUID="${PATH_BODY#*/}"
 fi
 
-if [ -z "${CURRENT_PATH_TOKEN}" ]; then
+if [ -z "${CURRENT_PATH_TOKEN}" ] || is_placeholder_value "${CURRENT_PATH_TOKEN}"; then
   CURRENT_PATH_TOKEN="$(generate_alnum 16)"
 fi
-if [ -z "${CURRENT_PATH_UUID}" ]; then
+if [ -z "${CURRENT_PATH_UUID}" ] || is_placeholder_value "${CURRENT_PATH_UUID}"; then
   CURRENT_PATH_UUID="$(cat /proc/sys/kernel/random/uuid)"
 fi
 
@@ -116,7 +116,7 @@ finish_step_ok "Environment is consistent."
 
 start_step 4 5 "Rebuilding and restarting services"
 log_info "This step may take several minutes."
-compose_up_build || die "Failed to rebuild/restart services."
+run_step_command "Rebuilding and restarting services" compose_up_build || die "Failed to rebuild/restart services."
 wait_for_service_health "postgres" 240
 wait_for_service_health "backend" 300
 wait_for_service_health "frontend" 300

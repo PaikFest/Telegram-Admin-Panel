@@ -24,8 +24,16 @@ type BroadcastAttachment = {
   previewUrl: string;
 };
 
+function generateClientId(): string {
+  if (typeof globalThis !== 'undefined' && typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID();
+  }
+
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function createAttachmentId(file: File): string {
-  return `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`;
+  return `${file.name}-${file.size}-${file.lastModified}-${generateClientId()}`;
 }
 
 function statusBadge(status: BroadcastItem['status']): string {
