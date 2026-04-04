@@ -11,6 +11,8 @@ BOOT_COLOR_WARN='\033[33m'
 BOOT_COLOR_ERR='\033[31m'
 BOOT_COLOR_TITLE='\033[1;34m'
 BOOT_COLOR_RESET='\033[0m'
+INSTALL_TOTAL_START_TS="$(date +%s)"
+INSTALL_TOTAL_STEPS=7
 
 boot_log() {
   local color="$1"
@@ -47,6 +49,61 @@ boot_banner() {
   echo
 }
 
+boot_format_duration() {
+  local total="${1:-0}"
+  local hours minutes seconds
+  hours=$((total / 3600))
+  minutes=$(((total % 3600) / 60))
+  seconds=$((total % 60))
+  printf '%02d:%02d:%02d' "${hours}" "${minutes}" "${seconds}"
+}
+
+boot_render_progress_bar() {
+  local current="$1"
+  local total="$2"
+  local width=12
+  local filled empty i bar
+
+  if [ "${total}" -le 0 ]; then
+    total=1
+  fi
+
+  filled=$((current * width / total))
+  empty=$((width - filled))
+  bar="["
+  for ((i = 0; i < filled; i++)); do
+    bar+="#"
+  done
+  for ((i = 0; i < empty; i++)); do
+    bar+="."
+  done
+  bar+="]"
+  printf '%s' "${bar}"
+}
+
+boot_start_step() {
+  local current="$1"
+  local total="$2"
+  local title="$3"
+  local elapsed
+  elapsed="$(( $(date +%s) - INSTALL_TOTAL_START_TS ))"
+
+  echo
+  printf '%b==> Step %s/%s: %s%b\n' "${BOOT_COLOR_TITLE}" "${current}" "${total}" "${title}" "${BOOT_COLOR_RESET}"
+  boot_info "$(boot_render_progress_bar "${current}" "${total}") Step ${current}/${total} - ${title}"
+  boot_info "Elapsed step: 00:00:00 | Total: $(boot_format_duration "${elapsed}")"
+}
+
+boot_finish_step_ok() {
+  local message="$1"
+  local step_start_ts="$2"
+  local step_elapsed total_elapsed
+  step_elapsed="$(( $(date +%s) - step_start_ts ))"
+  total_elapsed="$(( $(date +%s) - INSTALL_TOTAL_START_TS ))"
+  boot_ok "${message}"
+  boot_info "Elapsed step: $(boot_format_duration "${step_elapsed}") | Total: $(boot_format_duration "${total_elapsed}")"
+}
+
 require_supported_os() {
   if [ ! -f /etc/os-release ]; then
     boot_die "Cannot detect OS. /etc/os-release not found."
@@ -68,20 +125,20 @@ require_supported_os() {
 
 install_system_deps() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -y >/dev/null
-  apt-get install -y ca-certificates curl git gnupg lsb-release openssl python3 >/dev/null
+  apt-get update -y
+  apt-get install -y ca-certificates curl git gnupg lsb-release openssl python3
 }
 
 install_docker_if_needed() {
   if ! command -v docker >/dev/null 2>&1; then
     boot_info "Docker not found. Installing Docker..."
-    curl -fsSL https://get.docker.com | sh >/dev/null
+    curl -fL --progress-bar https://get.docker.com | sh
     boot_ok "Docker installed."
   else
     boot_ok "Docker already installed."
   fi
 
-  apt-get install -y docker-compose-plugin >/dev/null
+  apt-get install -y docker-compose-plugin
   systemctl enable docker >/dev/null 2>&1 || true
   systemctl start docker >/dev/null 2>&1 || true
 }
@@ -97,8 +154,8 @@ sync_repository() {
       return 0
     fi
 
-    git -C "${APP_DIR}" fetch --all --prune >/dev/null
-    if ! git -C "${APP_DIR}" pull --ff-only >/dev/null; then
+    git -C "${APP_DIR}" fetch --all --prune --progress
+    if ! git -C "${APP_DIR}" pull --ff-only --progress; then
       boot_die "Failed to update repository (non fast-forward). Resolve git state manually."
     fi
     boot_ok "Repository updated."
@@ -113,27 +170,32 @@ sync_repository() {
     fi
   fi
 
-  git clone --branch "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}" >/dev/null
+  git clone --progress --branch "${REPO_BRANCH}" --single-branch "${REPO_URL}" "${APP_DIR}"
   boot_ok "Repository cloned."
 }
 
 boot_banner
 require_root
 
-boot_section "Checking system"
+STEP_TS="$(date +%s)"
+boot_start_step 1 "${INSTALL_TOTAL_STEPS}" "Checking system"
 require_supported_os
-boot_ok "System check passed."
+boot_finish_step_ok "System check passed." "${STEP_TS}"
 
-boot_section "Installing dependencies"
+STEP_TS="$(date +%s)"
+boot_start_step 2 "${INSTALL_TOTAL_STEPS}" "Installing dependencies"
 install_system_deps
 install_docker_if_needed
+boot_finish_step_ok "Dependencies are ready." "${STEP_TS}"
 
-boot_section "Cloning/updating repository"
+STEP_TS="$(date +%s)"
+boot_start_step 3 "${INSTALL_TOTAL_STEPS}" "Cloning/updating repository"
 EXISTING_ENV=0
 if [ -f "${APP_DIR}/.env" ]; then
   EXISTING_ENV=1
 fi
 sync_repository
+boot_finish_step_ok "Repository is ready." "${STEP_TS}"
 
 chmod +x "${APP_DIR}/install.sh" "${APP_DIR}/update.sh" "${APP_DIR}/uninstall.sh" \
   "${APP_DIR}/reset-admin-password.sh" "${APP_DIR}/scripts/wait-for-health.sh" || true
@@ -142,6 +204,7 @@ chmod +x "${APP_DIR}/install.sh" "${APP_DIR}/update.sh" "${APP_DIR}/uninstall.sh
 source "${APP_DIR}/scripts/common.sh"
 init_ui
 maybe_install_gum
+set_process_start_ts "${INSTALL_TOTAL_START_TS}"
 
 INSTALL_MODE="fresh install"
 if [ "${EXISTING_ENV}" -eq 1 ]; then
@@ -149,7 +212,7 @@ if [ "${EXISTING_ENV}" -eq 1 ]; then
 fi
 banner "Installer (${INSTALL_MODE})"
 
-section "Preparing environment"
+start_step 4 "${INSTALL_TOTAL_STEPS}" "Preparing environment"
 ensure_env_file
 
 BOT_TOKEN_INPUT="${BOT_TOKEN:-}"
@@ -219,22 +282,21 @@ POSTGRES_PASSWORD_VALUE="$(get_env_value "POSTGRES_PASSWORD")"
 ensure_env_value "DATABASE_URL" "postgresql://${POSTGRES_USER_VALUE}:${POSTGRES_PASSWORD_VALUE}@postgres:5432/${POSTGRES_DB_VALUE}?schema=public"
 
 chmod 600 "${ENV_FILE}"
-log_ok ".env prepared."
+finish_step_ok ".env prepared."
 
-section "Building containers"
-if compose_up_build; then
-  log_ok "Containers built and started."
-else
-  die "Failed to start containers. Check docker logs."
-fi
+start_step 5 "${INSTALL_TOTAL_STEPS}" "Building containers"
+log_info "This step may take several minutes."
+compose_up_build || die "Failed to start containers. Check docker logs."
+finish_step_ok "Containers built and started."
 
-section "Waiting for health checks"
+start_step 6 "${INSTALL_TOTAL_STEPS}" "Waiting for health checks"
 wait_for_service_health "postgres" 240
 wait_for_service_health "backend" 300
 wait_for_service_health "frontend" 300
 wait_for_service_health "caddy" 180
+finish_step_ok "All services are healthy."
 
-section "Final summary"
+start_step 7 "${INSTALL_TOTAL_STEPS}" "Final summary"
 ADMIN_URL="$(build_admin_url)"
 if [ -z "${ADMIN_URL}" ]; then
   ADMIN_URL="http://${DETECTED_IP}${CURRENT_BASE_PATH}/login"
@@ -248,7 +310,9 @@ if [ -n "${APP_URL_VALUE}" ] && [[ "${APP_URL_VALUE}" == http*://* ]]; then
   IP_VALUE="${APP_URL_VALUE#*://}"
 fi
 
-write_credentials_file "${ADMIN_URL}" "${ADMIN_LOGIN_VALUE}" "${ADMIN_PASSWORD_VALUE}" "${BOT_DISPLAY_NAME}" "${BOT_USERNAME}" "${IP_VALUE}"
-print_summary_block "${ADMIN_URL}" "${ADMIN_LOGIN_VALUE}" "${ADMIN_PASSWORD_VALUE}" "${CREDENTIALS_FILE}" "${BOT_DISPLAY_NAME}" "${BOT_USERNAME}" "${IP_VALUE}"
+TOTAL_DURATION="$(format_duration "$(get_total_elapsed_seconds)")"
+write_credentials_file "${ADMIN_URL}" "${ADMIN_LOGIN_VALUE}" "${ADMIN_PASSWORD_VALUE}" "${BOT_DISPLAY_NAME}" "${BOT_USERNAME}" "${IP_VALUE}" "${TOTAL_DURATION}"
+print_summary_block "${ADMIN_URL}" "${ADMIN_LOGIN_VALUE}" "${ADMIN_PASSWORD_VALUE}" "${CREDENTIALS_FILE}" "${BOT_DISPLAY_NAME}" "${BOT_USERNAME}" "${IP_VALUE}" "${TOTAL_DURATION}"
+finish_step_ok "Summary generated."
 
 log_ok "Installation completed."

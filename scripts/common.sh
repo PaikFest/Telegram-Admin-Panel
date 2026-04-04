@@ -12,6 +12,11 @@ ENV_FILE="${APP_DIR}/.env"
 BOT_DISPLAY_NAME="Unknown"
 BOT_USERNAME="unknown"
 USE_GUM=0
+PROCESS_START_TS="${PROCESS_START_TS:-0}"
+STEP_START_TS="${STEP_START_TS:-0}"
+STEP_CURRENT="${STEP_CURRENT:-0}"
+STEP_TOTAL="${STEP_TOTAL:-0}"
+STEP_TITLE="${STEP_TITLE:-}"
 
 command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -91,6 +96,170 @@ banner() {
     _print_colored "2;37" "${subtitle}"
     echo
   fi
+}
+
+format_duration() {
+  local total="${1:-0}"
+  if ! [[ "${total}" =~ ^[0-9]+$ ]]; then
+    total=0
+  fi
+  local hours minutes seconds
+  hours=$((total / 3600))
+  minutes=$(((total % 3600) / 60))
+  seconds=$((total % 60))
+  printf '%02d:%02d:%02d' "${hours}" "${minutes}" "${seconds}"
+}
+
+render_progress_bar() {
+  local current="${1:-0}"
+  local total="${2:-1}"
+  local width="${3:-12}"
+
+  if [ "${total}" -le 0 ]; then
+    total=1
+  fi
+  if [ "${current}" -lt 0 ]; then
+    current=0
+  fi
+  if [ "${current}" -gt "${total}" ]; then
+    current="${total}"
+  fi
+
+  local filled empty i bar
+  filled=$((current * width / total))
+  empty=$((width - filled))
+  bar="["
+  for ((i = 0; i < filled; i++)); do
+    bar+="#"
+  done
+  for ((i = 0; i < empty; i++)); do
+    bar+="."
+  done
+  bar+="]"
+  printf '%s' "${bar}"
+}
+
+start_process_timer() {
+  PROCESS_START_TS="$(date +%s)"
+}
+
+set_process_start_ts() {
+  local ts="${1:-}"
+  if [ -n "${ts}" ] && [[ "${ts}" =~ ^[0-9]+$ ]]; then
+    PROCESS_START_TS="${ts}"
+    return 0
+  fi
+  start_process_timer
+}
+
+get_total_elapsed_seconds() {
+  if [ "${PROCESS_START_TS}" -le 0 ]; then
+    printf '%s' "0"
+    return 0
+  fi
+  printf '%s' "$(( $(date +%s) - PROCESS_START_TS ))"
+}
+
+get_step_elapsed_seconds() {
+  if [ "${STEP_START_TS}" -le 0 ]; then
+    printf '%s' "0"
+    return 0
+  fi
+  printf '%s' "$(( $(date +%s) - STEP_START_TS ))"
+}
+
+start_step() {
+  local current="$1"
+  local total="$2"
+  local title="$3"
+
+  if [ "${PROCESS_START_TS}" -le 0 ]; then
+    start_process_timer
+  fi
+
+  STEP_CURRENT="${current}"
+  STEP_TOTAL="${total}"
+  STEP_TITLE="${title}"
+  STEP_START_TS="$(date +%s)"
+
+  section "Step ${current}/${total}: ${title}"
+  log_info "$(render_progress_bar "${current}" "${total}") Step ${current}/${total} - ${title}"
+  log_info "Elapsed step: 00:00:00 | Total: $(format_duration "$(get_total_elapsed_seconds)")"
+}
+
+_finish_step() {
+  local level="$1"
+  local message="$2"
+  local step_elapsed total_elapsed
+  step_elapsed="$(format_duration "$(get_step_elapsed_seconds)")"
+  total_elapsed="$(format_duration "$(get_total_elapsed_seconds)")"
+
+  case "${level}" in
+    ok) log_ok "${message}" ;;
+    warn) log_warn "${message}" ;;
+    error) log_error "${message}" ;;
+    *) log_info "${message}" ;;
+  esac
+
+  log_info "Elapsed step: ${step_elapsed} | Total: ${total_elapsed}"
+}
+
+finish_step_ok() {
+  _finish_step "ok" "$1"
+}
+
+finish_step_warn() {
+  _finish_step "warn" "$1"
+}
+
+finish_step_error() {
+  _finish_step "error" "$1"
+}
+
+run_step_command() {
+  local title="$1"
+  shift
+
+  local tmp_log cmd_pid rc spinner_idx spinner_char step_elapsed total_elapsed
+  tmp_log="$(mktemp)"
+  spinner_idx=0
+
+  ("$@") >"${tmp_log}" 2>&1 &
+  cmd_pid=$!
+
+  while kill -0 "${cmd_pid}" 2>/dev/null; do
+    spinner_char='|'
+    case $((spinner_idx % 4)) in
+      0) spinner_char='|' ;;
+      1) spinner_char='/' ;;
+      2) spinner_char='-' ;;
+      3) spinner_char='\\' ;;
+    esac
+    spinner_idx=$((spinner_idx + 1))
+    step_elapsed="$(format_duration "$(get_step_elapsed_seconds)")"
+    total_elapsed="$(format_duration "$(get_total_elapsed_seconds)")"
+    printf '\r[%s] %s | Elapsed step: %s | Total: %s' "${spinner_char}" "${title}" "${step_elapsed}" "${total_elapsed}"
+    sleep 0.2
+  done
+
+  wait "${cmd_pid}" || rc=$?
+  rc="${rc:-0}"
+
+  printf '\r'
+  printf '%*s\r' 160 ''
+
+  if [ "${rc}" -ne 0 ]; then
+    log_error "${title} failed."
+    if [ -s "${tmp_log}" ]; then
+      log_info "Last 120 lines:"
+      tail -n 120 "${tmp_log}" || true
+    fi
+    rm -f "${tmp_log}"
+    return "${rc}"
+  fi
+
+  rm -f "${tmp_log}"
+  return 0
 }
 
 die() {
@@ -400,17 +569,12 @@ compose() {
 }
 
 compose_up_build() {
-  local tmp_log
-  tmp_log="$(mktemp)"
-  if compose up -d --build >"${tmp_log}" 2>&1; then
-    rm -f "${tmp_log}"
+  if (cd "${APP_DIR}" && BUILDKIT_PROGRESS=plain docker compose up -d --build); then
     return 0
   fi
 
   log_error "docker compose up -d --build failed."
-  log_info "Last 120 lines from compose output:"
-  tail -n 120 "${tmp_log}" || true
-  rm -f "${tmp_log}"
+  compose ps || true
   return 1
 }
 
@@ -437,7 +601,9 @@ wait_for_service_health() {
     chmod +x "${APP_DIR}/scripts/wait-for-health.sh" >/dev/null 2>&1 || true
   fi
 
-  if bash "${APP_DIR}/scripts/wait-for-health.sh" "${service}" "${timeout}" >/dev/null 2>&1; then
+  log_info "Waiting for ${service} health (timeout ${timeout}s). Progress reflects wait window, not readiness percent."
+
+  if bash "${APP_DIR}/scripts/wait-for-health.sh" "${service}" "${timeout}"; then
     log_ok "${service} is healthy."
     return 0
   fi
@@ -482,6 +648,7 @@ print_summary_block() {
   local bot_name="$5"
   local bot_username="$6"
   local ip="$7"
+  local total_duration="${8:-}"
 
   [ -n "${admin_url}" ] || admin_url="unknown"
   [ -n "${admin_login}" ] || admin_login="unknown"
@@ -490,6 +657,7 @@ print_summary_block() {
   [ -n "${bot_name}" ] || bot_name="Unknown"
   [ -n "${bot_username}" ] || bot_username="unknown"
   [ -n "${ip}" ] || ip="unknown"
+  [ -n "${total_duration}" ] || total_duration="$(format_duration "$(get_total_elapsed_seconds)")"
 
   local postgres_health backend_health frontend_health caddy_health
   postgres_health="$(get_service_health "postgres")"
@@ -508,6 +676,7 @@ print_summary_block() {
       "Login: ${admin_login}" \
       "Password: ${admin_password}" \
       "Credentials file: ${credentials_path}" \
+      "Total duration: ${total_duration}" \
       "" \
       "Health: postgres=${postgres_health}, backend=${backend_health}, frontend=${frontend_health}, caddy=${caddy_health}"
   else
@@ -519,6 +688,7 @@ print_summary_block() {
     echo "Login            : ${admin_login}"
     echo "Password         : ${admin_password}"
     echo "Credentials file : ${credentials_path}"
+    echo "Total duration   : ${total_duration}"
     echo "Health           : postgres=${postgres_health}, backend=${backend_health}, frontend=${frontend_health}, caddy=${caddy_health}"
     _print_colored "1;36" "=========================================="
   fi
@@ -531,6 +701,7 @@ write_credentials_file() {
   local bot_name="$4"
   local bot_username="$5"
   local ip="$6"
+  local total_duration="${7:-}"
 
   [ -n "${admin_url}" ] || admin_url="unknown"
   [ -n "${admin_login}" ] || admin_login="unknown"
@@ -538,6 +709,7 @@ write_credentials_file() {
   [ -n "${bot_name}" ] || bot_name="Unknown"
   [ -n "${bot_username}" ] || bot_username="unknown"
   [ -n "${ip}" ] || ip="unknown"
+  [ -n "${total_duration}" ] || total_duration="$(format_duration "$(get_total_elapsed_seconds)")"
 
   local postgres_health backend_health frontend_health caddy_health
   postgres_health="$(get_service_health "postgres")"
@@ -554,6 +726,7 @@ Bot username: @${bot_username}
 Admin URL: ${admin_url}
 Login: ${admin_login}
 Password: ${admin_password}
+Total duration: ${total_duration}
 Health: postgres=${postgres_health}, backend=${backend_health}, frontend=${frontend_health}, caddy=${caddy_health}
 EOF
 

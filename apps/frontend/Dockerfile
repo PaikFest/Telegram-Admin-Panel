@@ -11,6 +11,8 @@ COPY apps/frontend ./apps/frontend
 
 ARG ADMIN_BASE_PATH
 ENV NEXT_PUBLIC_ADMIN_BASE_PATH=${ADMIN_BASE_PATH}
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 
 RUN npm run build --workspace apps/frontend && npm prune --omit=dev \
   && cd /app/apps/frontend \
