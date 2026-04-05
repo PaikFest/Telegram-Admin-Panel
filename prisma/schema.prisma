@@ -163,6 +163,8 @@ model Outbox {
   filePath            String?          @map("file_path")
   mimeType            String?          @map("mime_type") @db.VarChar(255)
   originalFileName    String?          @map("original_file_name") @db.VarChar(255)
+  mediaGroupId        String?          @map("media_group_id") @db.VarChar(64)
+  mediaGroupOrder     Int?             @map("media_group_order")
   status              OutboxStatus    @default(PENDING)
   errorText           String?         @map("error_text")
   attempts            Int             @default(0)
@@ -176,6 +178,7 @@ model Outbox {
   @@index([status, createdAt])
   @@index([processingStartedAt])
   @@index([userId, createdAt])
+  @@index([mediaGroupId, status])
   @@map("outbox")
 }
 

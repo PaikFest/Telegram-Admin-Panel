@@ -4,13 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Direction, MessageType, OutboxSourceType, Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
+import { sanitizePlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
-
-const MAX_TELEGRAM_CAPTION_LENGTH = 1024;
 
 @Injectable()
 export class InboxService {
@@ -168,21 +167,9 @@ export class InboxService {
       mimetype: string;
       originalname: string;
     }>,
-    caption?: string,
   ): Promise<{ success: boolean; outboxIds: number[] }> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('At least one image file is required');
-    }
-
-    const normalizedCaption = sanitizeOptionalPlainText(caption);
-    if (
-      normalizedCaption !== null &&
-      normalizedCaption.length > MAX_TELEGRAM_CAPTION_LENGTH
-    ) {
-      await this.cleanupStagedFiles(files);
-      throw new BadRequestException(
-        `Caption is too long (max ${MAX_TELEGRAM_CAPTION_LENGTH} characters)`,
-      );
     }
 
     const user = await this.prisma.user.findUnique({
@@ -196,6 +183,7 @@ export class InboxService {
     }
 
     let jobs: number[];
+    const mediaGroupId = files.length > 1 ? randomUUID() : null;
     try {
       jobs = await this.prisma.$transaction(async (tx) => {
         const created: number[] = [];
@@ -208,10 +196,12 @@ export class InboxService {
               sourceType: OutboxSourceType.REPLY,
               messageType: MessageType.PHOTO,
               text: null,
-              caption: index === 0 ? normalizedCaption : null,
+              caption: null,
               filePath: file.path,
-              mimeType: sanitizeOptionalPlainText(file.mimetype),
-              originalFileName: sanitizeOptionalPlainText(file.originalname),
+              mimeType: file.mimetype?.trim() || null,
+              originalFileName: file.originalname?.trim() || null,
+              mediaGroupId,
+              mediaGroupOrder: mediaGroupId ? index : null,
             },
             select: {
               id: true,

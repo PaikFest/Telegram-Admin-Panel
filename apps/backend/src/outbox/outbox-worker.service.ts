@@ -24,6 +24,8 @@ type ClaimedOutboxRow = {
   file_path: string | null;
   mime_type: string | null;
   original_file_name: string | null;
+  media_group_id: string | null;
+  media_group_order: number | null;
   attempts: number;
 };
 
@@ -201,6 +203,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
           o."file_path",
           o."mime_type",
           o."original_file_name",
+          o."media_group_id",
+          o."media_group_order",
           o."attempts";
       `;
 
@@ -221,6 +225,15 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processJob(job: ClaimedOutboxRow): Promise<void> {
+    if (
+      job.source_type === 'REPLY' &&
+      job.message_type === MessageType.PHOTO &&
+      job.media_group_id
+    ) {
+      await this.processInboxMediaGroupJob(job);
+      return;
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: job.user_id },
       select: {
@@ -300,6 +313,131 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.failJob(job, sendResult.errorText);
+  }
+
+  private async processInboxMediaGroupJob(job: ClaimedOutboxRow): Promise<void> {
+    const mediaGroupId = job.media_group_id;
+    if (!mediaGroupId) {
+      return;
+    }
+
+    const groupWindow = await this.prisma.outbox.findMany({
+      where: {
+        mediaGroupId,
+        sourceType: 'REPLY',
+        messageType: MessageType.PHOTO,
+        status: {
+          in: [OutboxStatus.PENDING, OutboxStatus.PROCESSING],
+        },
+      },
+      orderBy: [{ mediaGroupOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+      },
+    });
+
+    if (groupWindow.length === 0) {
+      return;
+    }
+
+    if (groupWindow[0].id !== job.id) {
+      return;
+    }
+
+    await this.claimPendingMediaGroupJobs(mediaGroupId);
+
+    const albumJobs = await this.prisma.outbox.findMany({
+      where: {
+        mediaGroupId,
+        sourceType: 'REPLY',
+        messageType: MessageType.PHOTO,
+        status: OutboxStatus.PROCESSING,
+      },
+      orderBy: [{ mediaGroupOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      select: {
+        id: true,
+        userId: true,
+        sourceType: true,
+        messageType: true,
+        text: true,
+        caption: true,
+        filePath: true,
+        mimeType: true,
+        originalFileName: true,
+        mediaGroupId: true,
+        mediaGroupOrder: true,
+        attempts: true,
+      },
+    });
+
+    if (albumJobs.length === 0) {
+      return;
+    }
+
+    const userId = albumJobs[0].userId;
+    if (!albumJobs.every((item) => item.userId === userId)) {
+      await this.failMediaGroupJobs(albumJobs, 'Media group has inconsistent user mapping');
+      return;
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        telegramId: true,
+        isBlocked: true,
+      },
+    });
+
+    if (!user) {
+      await this.failMediaGroupJobs(albumJobs, 'User not found');
+      return;
+    }
+
+    if (user.isBlocked) {
+      await this.failMediaGroupJobs(albumJobs, 'User is marked as blocked');
+      return;
+    }
+
+    const filePaths: string[] = [];
+    for (const albumJob of albumJobs) {
+      if (!albumJob.filePath || !existsSync(albumJob.filePath)) {
+        await this.failMediaGroupJobs(albumJobs, 'Photo file is missing on disk');
+        return;
+      }
+      filePaths.push(albumJob.filePath);
+    }
+
+    let sendResult = await this.telegramService.sendMediaGroup(user.telegramId, filePaths);
+
+    let rateLimitRetries = 0;
+    while (
+      !sendResult.success &&
+      sendResult.isRateLimit &&
+      rateLimitRetries < MAX_429_RETRIES_PER_CLAIM
+    ) {
+      const retryAfterSeconds = sendResult.retryAfterSeconds ?? 1;
+      await this.logsService.warn(
+        'outbox-worker',
+        `Telegram 429 for mediaGroupId=${mediaGroupId}, retry_after=${retryAfterSeconds}s`,
+      );
+      await this.sleep((retryAfterSeconds + 1) * 1000);
+      rateLimitRetries += 1;
+      sendResult = await this.telegramService.sendMediaGroup(user.telegramId, filePaths);
+    }
+
+    if (sendResult.success) {
+      await this.completeMediaGroupJobs(albumJobs, sendResult.telegramMessages, sendResult.rawPayload);
+      return;
+    }
+
+    const canRequeue = albumJobs.every((item) => item.attempts < MAX_OUTBOX_ATTEMPTS);
+    if (sendResult.isRateLimit && canRequeue) {
+      await this.requeueMediaGroupJobs(albumJobs, sendResult.errorText);
+      return;
+    }
+
+    await this.failMediaGroupJobs(albumJobs, sendResult.errorText);
   }
 
   private async completeJob(
@@ -395,6 +533,203 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
     if (broadcastId) {
       await this.refreshBroadcastStats(broadcastId);
+    }
+  }
+
+  private async claimPendingMediaGroupJobs(mediaGroupId: string): Promise<void> {
+    await this.prisma.$executeRaw`
+      UPDATE "outbox"
+      SET "status" = 'PROCESSING',
+          "processing_started_at" = NOW(),
+          "attempts" = "attempts" + 1,
+          "error_text" = NULL
+      WHERE "media_group_id" = ${mediaGroupId}
+        AND "source_type" = 'REPLY'
+        AND "message_type" = 'PHOTO'
+        AND "status" = 'PENDING';
+    `;
+  }
+
+  private async completeMediaGroupJobs(
+    albumJobs: Array<{
+      id: number;
+      userId: number;
+      sourceType: 'REPLY' | 'BROADCAST';
+      messageType: MessageType;
+      text: string | null;
+      caption: string | null;
+      filePath: string | null;
+      mimeType: string | null;
+      originalFileName: string | null;
+      mediaGroupId: string | null;
+      mediaGroupOrder: number | null;
+      attempts: number;
+    }>,
+    telegramMessages: Array<{
+      telegramMessageId: number;
+      rawPayload: Prisma.InputJsonValue;
+    }>,
+    rawPayload: Prisma.InputJsonValue,
+  ): Promise<void> {
+    if (telegramMessages.length !== albumJobs.length) {
+      await this.failMediaGroupJobs(albumJobs, 'Telegram media group response size mismatch');
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (let index = 0; index < albumJobs.length; index += 1) {
+        const albumJob = albumJobs[index];
+        const sentMessage = telegramMessages[index];
+        const photoIds = this.extractPhotoIds(sentMessage.rawPayload);
+
+        await tx.outbox.update({
+          where: { id: albumJob.id },
+          data: {
+            status: OutboxStatus.SENT,
+            sentAt: new Date(),
+            processingStartedAt: null,
+            errorText: null,
+          },
+        });
+
+        await tx.message.create({
+          data: {
+            userId: albumJob.userId,
+            telegramMessageId: sentMessage.telegramMessageId,
+            direction: Direction.OUTGOING,
+            messageType: MessageType.PHOTO,
+            text: null,
+            caption: null,
+            telegramFileId: photoIds.fileId,
+            telegramFileUniqueId: photoIds.fileUniqueId,
+            rawPayload: sentMessage.rawPayload,
+            deliveryStatus: DeliveryStatus.SENT,
+            isRead: true,
+          },
+        });
+      }
+    });
+
+    for (const albumJob of albumJobs) {
+      await this.cleanupUploadedFile(
+        albumJob.id,
+        albumJob.sourceType,
+        albumJob.messageType,
+        albumJob.filePath,
+        'sent',
+      );
+    }
+
+    try {
+      await this.logsService.info(
+        'outbox-worker',
+        `Media group sent for userId=${albumJobs[0]?.userId}`,
+        rawPayload,
+      );
+    } catch {
+      // Do not fail completed processing because logging failed.
+    }
+  }
+
+  private async requeueMediaGroupJobs(
+    albumJobs: Array<{
+      id: number;
+    }>,
+    errorText: string,
+  ): Promise<void> {
+    const ids = albumJobs.map((item) => item.id);
+    if (ids.length === 0) {
+      return;
+    }
+
+    await this.prisma.outbox.updateMany({
+      where: {
+        id: {
+          in: ids,
+        },
+      },
+      data: {
+        status: OutboxStatus.PENDING,
+        processingStartedAt: null,
+        errorText,
+      },
+    });
+  }
+
+  private async failMediaGroupJobs(
+    albumJobs: Array<{
+      id: number;
+      userId: number;
+      sourceType: 'REPLY' | 'BROADCAST';
+      messageType: MessageType;
+      text: string | null;
+      caption: string | null;
+      filePath: string | null;
+      mimeType: string | null;
+      originalFileName: string | null;
+      mediaGroupId: string | null;
+      mediaGroupOrder: number | null;
+      attempts: number;
+    }>,
+    errorText: string,
+  ): Promise<void> {
+    if (albumJobs.length === 0) {
+      return;
+    }
+
+    const ids = albumJobs.map((item) => item.id);
+    const shouldMarkBlocked = this.shouldMarkBlocked(errorText);
+    const userId = albumJobs[0].userId;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.outbox.updateMany({
+        where: {
+          id: {
+            in: ids,
+          },
+        },
+        data: {
+          status: OutboxStatus.FAILED,
+          errorText,
+          processingStartedAt: null,
+        },
+      });
+
+      for (const albumJob of albumJobs) {
+        await tx.message.create({
+          data: {
+            userId: albumJob.userId,
+            telegramMessageId: null,
+            direction: Direction.OUTGOING,
+            messageType: MessageType.PHOTO,
+            text: null,
+            caption: null,
+            telegramFileId: null,
+            telegramFileUniqueId: null,
+            rawPayload: this.toJson({ error: errorText }),
+            deliveryStatus: DeliveryStatus.FAILED,
+            errorText,
+            isRead: true,
+          },
+        });
+      }
+
+      if (shouldMarkBlocked) {
+        await tx.user.update({
+          where: { id: userId },
+          data: { isBlocked: true },
+        });
+      }
+    });
+
+    for (const albumJob of albumJobs) {
+      await this.cleanupUploadedFile(
+        albumJob.id,
+        albumJob.sourceType,
+        albumJob.messageType,
+        albumJob.filePath,
+        'failed',
+      );
     }
   }
 

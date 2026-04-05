@@ -62,7 +62,6 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [search, setSearch] = useState('');
   const [replyText, setReplyText] = useState('');
-  const [attachmentCaption, setAttachmentCaption] = useState('');
   const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
   const [draggingAttachmentId, setDraggingAttachmentId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -88,7 +87,6 @@ export default function InboxPage() {
       previous.forEach(revokeAttachmentPreview);
       return [];
     });
-    setAttachmentCaption('');
     setDraggingAttachmentId(null);
     resetFileInput();
   }, []);
@@ -276,11 +274,6 @@ export default function InboxPage() {
         const formData = new FormData();
         for (const attachment of attachments) {
           formData.append('files', attachment.file);
-        }
-
-        const caption = attachmentCaption.trim();
-        if (caption.length > 0) {
-          formData.append('caption', caption);
         }
 
         const response = await fetch(withAdminBasePath(`/api/inbox/conversations/${selectedUserId}/reply-media`), {
@@ -513,13 +506,6 @@ export default function InboxPage() {
                         </div>
                       ))}
                     </div>
-                    <input
-                      placeholder="Caption for attachments (optional)"
-                      value={attachmentCaption}
-                      onChange={(event) => setAttachmentCaption(event.target.value)}
-                      maxLength={1024}
-                      disabled={sending}
-                    />
                   </div>
                 ) : null}
               </form>

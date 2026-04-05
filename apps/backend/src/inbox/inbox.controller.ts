@@ -88,8 +88,7 @@ export class InboxController {
     @Param('userId', ParseIntPipe) userId: number,
     @UploadedFiles()
     files: Array<{ path: string; mimetype: string; originalname: string }> | undefined,
-    @Body('caption') caption?: string,
   ) {
-    return this.inboxService.sendReplyMedia(userId, files ?? [], caption);
+    return this.inboxService.sendReplyMedia(userId, files ?? []);
   }
 }

@@ -20,6 +20,22 @@ export type TelegramSendResult =
       retryAfterSeconds: number | null;
     };
 
+export type TelegramSendMediaGroupResult =
+  | {
+      success: true;
+      telegramMessages: Array<{
+        telegramMessageId: number;
+        rawPayload: Prisma.InputJsonValue;
+      }>;
+      rawPayload: Prisma.InputJsonValue;
+    }
+  | {
+      success: false;
+      errorText: string;
+      isRateLimit: boolean;
+      retryAfterSeconds: number | null;
+    };
+
 @Injectable()
 export class TelegramService implements OnModuleInit, OnModuleDestroy {
   private bot: TelegramBot | null = null;
@@ -123,6 +139,56 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
         success: true,
         telegramMessageId: sentMessage.message_id,
         rawPayload: this.toJson(sentMessage),
+      };
+    } catch (error) {
+      const parsed = this.extractTelegramError(error);
+
+      return {
+        success: false,
+        errorText: parsed.errorText,
+        isRateLimit: parsed.isRateLimit,
+        retryAfterSeconds: parsed.retryAfterSeconds,
+      };
+    }
+  }
+
+  async sendMediaGroup(
+    telegramId: string,
+    filePaths: string[],
+  ): Promise<TelegramSendMediaGroupResult> {
+    if (!this.bot) {
+      return {
+        success: false,
+        errorText: 'Telegram bot is not initialized',
+        isRateLimit: false,
+        retryAfterSeconds: null,
+      };
+    }
+
+    if (filePaths.length < 2) {
+      return {
+        success: false,
+        errorText: 'Media group requires at least 2 files',
+        isRateLimit: false,
+        retryAfterSeconds: null,
+      };
+    }
+
+    try {
+      const media = filePaths.map((filePath) => ({
+        type: 'photo' as const,
+        media: createReadStream(filePath) as unknown as string,
+      }));
+
+      const sentMessages = await this.bot.sendMediaGroup(telegramId, media);
+
+      return {
+        success: true,
+        telegramMessages: sentMessages.map((message) => ({
+          telegramMessageId: message.message_id,
+          rawPayload: this.toJson(message),
+        })),
+        rawPayload: this.toJson(sentMessages),
       };
     } catch (error) {
       const parsed = this.extractTelegramError(error);
