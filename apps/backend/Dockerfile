@@ -6,6 +6,7 @@ FROM base AS deps
 COPY package*.json ./
 COPY apps/backend/package.json ./apps/backend/package.json
 COPY apps/frontend/package.json ./apps/frontend/package.json
+COPY prisma ./prisma
 RUN npm ci
 
 FROM base AS builder
@@ -19,13 +20,14 @@ FROM base AS prod-deps
 COPY package*.json ./
 COPY apps/backend/package.json ./apps/backend/package.json
 COPY apps/frontend/package.json ./apps/frontend/package.json
-RUN npm ci --omit=dev
+COPY prisma ./prisma
+RUN npm ci --omit=dev && npx prisma generate --schema=/app/prisma/schema.prisma
 
 FROM base AS runner
 ENV NODE_ENV=production
 
 COPY --from=prod-deps /app/node_modules ./node_modules
-COPY --from=builder /app/prisma ./prisma
+COPY --from=prod-deps /app/prisma ./prisma
 COPY --from=builder /app/apps/backend/dist ./apps/backend/dist
 COPY --from=builder /app/apps/backend/package.json ./apps/backend/package.json
 
