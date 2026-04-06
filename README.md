@@ -1,132 +1,189 @@
-# Opener Bot Admin
+# Telegram Bot Admin Panel
 
-Self-hosted universal admin panel for Telegram bot runtime.
+Универсальная self-hosted админ-панель для Telegram-бота с современным тёмным интерфейсом и установкой на VPS в пару команд.  
+Проект поднимается через Docker Compose и работает как отдельный runtime бота (long polling).
 
-## Scope
-This project includes only:
-- admin login/password auth (session cookie)
-- Telegram long polling runtime
-- outbox queue + worker-based outgoing delivery
-- photo support in inbox (incoming preview + outgoing photo reply)
-- secret admin base path for frontend and API
-- user list
-- inbox dialogs
-- reply from bot
-- broadcast to all users
-- message history
-- minimal logs
+🔗 Репозиторий: [https://github.com/PaikFest/Telegram-Bot-Admin-Panel](https://github.com/PaikFest/Telegram-Bot-Admin-Panel)
 
-No VPN logic, Hiddify/3x-ui integration, payments, tariffs, subscriptions, Mini App, AI, webhook UI, or extra CRM features.
+---
 
-## Stack
-- Backend: NestJS + TypeScript
-- Frontend: Next.js + TypeScript
-- Database: PostgreSQL
-- ORM: Prisma
-- Proxy: Caddy
-- Deploy: Docker Compose
-- Telegram mode: long polling (no webhook)
+## Что это
+**Telegram Bot Admin Panel** — это операторская веб-панель для управления диалогами Telegram-бота:
+- принимать входящие сообщения,
+- отвечать пользователям,
+- делать массовые рассылки,
+- работать с историей сообщений и медиа,
+- безопасно входить в панель по login/password.
 
-## Outgoing delivery flow
-- Inbox reply does not send directly to Telegram API.
-- Reply creates `outbox` job (`PENDING`).
-- Broadcast creates one `outbox` job per user and links each to `broadcast_deliveries`.
-- `OutboxWorkerService` atomically claims jobs (`PENDING -> PROCESSING`) with `FOR UPDATE SKIP LOCKED`.
-- Worker sends messages via Telegram Bot API, writes `messages` history, updates outbox and broadcast delivery status.
-- Stale `PROCESSING` jobs are recovered back to `PENDING` after timeout (default 5 minutes).
-- Telegram `429` (`retry_after`) is handled with delay/backoff and controlled retry.
-- Photo replies are queued in `outbox` and sent by worker via `sendPhoto`.
+Без привязки к VPN, оплатам, тарифам или другим узким бизнес-сценариям.
 
-## Media flow
-- Incoming Telegram photos are stored as `messages` with `messageType=PHOTO`, `caption`, `telegram_file_id`, `telegram_file_unique_id`.
-- Photo preview is served only via backend proxy endpoint: `GET <ADMIN_BASE_PATH>/api/media/messages/:messageId/file`.
-- Frontend never receives `BOT_TOKEN`.
+---
 
-## Monorepo layout
-- `apps/backend`
-- `apps/frontend`
-- `prisma`
-- `deploy`
-- `scripts`
+## Что умеет
+- 📨 **Inbox**: список диалогов, история сообщений, ответы пользователям
+- 🖼️ **Фото в чате**: просмотр входящих изображений и отправка фото из панели
+- 📣 **Broadcasts**: массовые рассылки (текст/изображения) через очередь outbox
+- 👥 **Users**: список пользователей Telegram и ручное добавление
+- 📜 **Logs**: системные логи и базовая диагностика
+- ⚙️ **Settings**: смена логина/пароля администратора
+- 🔒 **Auth + Session**: вход по login/password, cookie-сессии
+- 🧠 **Long polling runtime**: проект сам получает Telegram updates (без webhook)
+- 🛡️ **Скрытый admin path**: доступ к панели и API через секретный путь
 
-## Required environment variables
-Only these variables are used:
-- `BOT_TOKEN`
-- `DATABASE_URL`
-- `POSTGRES_DB`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `SESSION_SECRET`
-- `ADMIN_LOGIN`
-- `ADMIN_PASSWORD`
-- `ADMIN_PATH_TOKEN`
-- `ADMIN_PATH_UUID`
-- `ADMIN_BASE_PATH`
-- `APP_URL`
-- `NODE_ENV`
+---
 
-## One-line install
+## Для кого подходит
+- Владельцам Telegram-ботов, которым нужна аккуратная self-hosted админка
+- Командам поддержки/операторам, которые отвечают пользователям в чате
+- Тем, кто хочет запускать систему на своём VPS и контролировать данные
+
+---
+
+## Что понадобится перед установкой
+Подготовьте:
+- Ubuntu VPS (22.04 или 24.04)
+- root-доступ к серверу
+- `BOT_TOKEN` от вашего Telegram-бота (через @BotFather)
+- открытый входящий порт `80` (для Caddy)
+
+> Домен не обязателен: система может работать по IP.
+
+---
+
+## Быстрый старт
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/PaikFest/Telegram-Bot-Admin-Panel/main/install.sh)
 ```
 
-You can also pass repo and token explicitly:
+Во время установки скрипт:
+1. спросит `BOT_TOKEN` (скрытым вводом),
+2. проверит токен через Telegram API,
+3. поднимет сервисы через Docker Compose,
+4. дождётся health checks,
+5. покажет итоговые данные доступа.
+
+---
+
+## Установка (рекомендуемый сценарий)
+### 1. One-line install
 ```bash
-REPO_URL="https://github.com/USER/REPO.git" BOT_TOKEN="<telegram_bot_token>" bash install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/PaikFest/Telegram-Bot-Admin-Panel/main/install.sh)
 ```
 
-## Server install/update/remove scripts
-- `install.sh`
-- `update.sh`
-- `uninstall.sh`
-- `reset-admin-password.sh`
-
-## Update flow
+### 2. Вариант с явным репозиторием
+Если хотите принудительно указать репозиторий:
 ```bash
-cd /opt/Telegram-AdminBot-Panel && git pull && bash update.sh
+REPO_URL="https://github.com/PaikFest/Telegram-Bot-Admin-Panel.git" bash <(curl -fsSL https://raw.githubusercontent.com/PaikFest/Telegram-Bot-Admin-Panel/main/install.sh)
 ```
 
-## Reset admin credentials
-```bash
-cd /opt/Telegram-AdminBot-Panel && bash reset-admin-password.sh
+---
+
+## Что вы получите после установки
+Скрипт выведет:
+- полный **Admin URL** (с секретным base path),
+- **Login**,
+- **Password**,
+- имя/username бота (если Telegram API вернул их),
+- статусы здоровья сервисов.
+
+Также данные сохраняются в файл:
+```text
+/root/opener-bot-admin-credentials.txt
+```
+(с правами доступа `600`).
+
+---
+
+## Как открыть панель
+Используйте URL из summary после установки. Формат обычно такой:
+```text
+http://<SERVER_IP>/<ADMIN_PATH_TOKEN>/<ADMIN_PATH_UUID>/login
 ```
 
-## Local run (without install.sh)
-1. Copy env:
+Важно: это **дополнительный слой сокрытия**. Он не заменяет авторизацию — login/password всё равно обязательны.
+
+---
+
+## Обновление проекта
 ```bash
-cp .env.example .env
+cd /opt/Telegram-AdminBot-Panel
+git pull
+bash update.sh
 ```
-2. Fill `BOT_TOKEN` and secrets.
-3. Start:
+
+---
+
+## Сброс логина/пароля администратора
 ```bash
-docker compose up -d --build
+cd /opt/Telegram-AdminBot-Panel
+bash reset-admin-password.sh
 ```
-4. Open `http://<server-ip><ADMIN_BASE_PATH>/login`.
 
-## Health checks
-- Caddy: `GET /health`
-- Backend: `GET <ADMIN_BASE_PATH>/api/health`
-- Frontend: `GET <ADMIN_BASE_PATH>/health` on frontend container
+Скрипт обновит credentials и снова покажет актуальный Admin URL + новые данные входа.
 
-## Security defaults
-- password hashing: bcrypt
-- Helmet enabled
-- login rate limiting
-- DTO validation (whitelist + forbid unknown)
-- XSS sanitization for text inputs
-- HttpOnly session cookie
-- cookie `secure=false` for HTTP/IP mode
-- CORS restricted to `APP_URL`
+---
 
-## Notes
-- On first backend start, admin account is created from `ADMIN_LOGIN`/`ADMIN_PASSWORD` if DB has no admins.
-- `install.sh` generates hidden admin path (`ADMIN_BASE_PATH`) and prints full Admin URL with login/password.
-- `install.sh` writes generated credentials to `/root/opener-bot-admin-credentials.txt` with mode `600`.
+## Удаление проекта
+```bash
+cd /opt/Telegram-AdminBot-Panel
+bash uninstall.sh
+```
 
-## GitHub Actions CI/CD
-Workflows:
-- `.github/workflows/ci.yml`:
-  - runs on `push` and `pull_request` to `main`
-  - `npm ci`
-  - `npm run build --workspace apps/backend`
-  - `npm run build --workspace apps/frontend`
+Удаляет контейнеры, volume-данные проекта и credentials-файл.
+
+---
+
+## Коротко про интерфейс
+### Inbox
+Главный рабочий экран:
+- список диалогов слева,
+- переписка справа,
+- ответ текстом/фото,
+- история сообщений и статусы доставки.
+
+### Broadcasts
+Массовые сообщения всем активным пользователям:
+- создание рассылки,
+- очередь отправки,
+- история запусков и результаты.
+
+### Users
+Список Telegram-пользователей:
+- поиск,
+- статусы,
+- ручное добавление пользователя.
+
+### Logs
+Минимальные системные логи для операционной диагностики.
+
+### Settings
+Смена admin login/password внутри панели.
+
+---
+
+## Безопасность
+Пожалуйста, соблюдайте базовые правила:
+- 🔐 храните `.env`, login/password и credentials-файл в секрете
+- 🔑 **никогда не публикуйте `BOT_TOKEN`**
+- 🌐 по возможности используйте HTTPS (reverse proxy + TLS)
+- 🧱 ограничьте доступ к VPS (firewall, SSH-ключи, fail2ban)
+- 🧾 регулярно обновляйте систему и проект (`update.sh`)
+
+---
+
+## Важно знать
+- Проект использует **long polling**, не webhook.
+- Основной рабочий путь деплоя: `install.sh` / `update.sh`.
+- Доступ в админку идёт через секретный base path + авторизацию.
+- Если вы переносите сервер или меняется IP, проверяйте актуальный `APP_URL` и итоговый Admin URL.
+
+---
+
+## Поддержка и Issues
+Если нашли баг или хотите предложить улучшение — создайте issue:  
+👉 [https://github.com/PaikFest/Telegram-Bot-Admin-Panel/issues](https://github.com/PaikFest/Telegram-Bot-Admin-Panel/issues)
+
+---
+
+Спасибо, что используете **Telegram Bot Admin Panel**.  
+Пусть поддержка пользователей будет быстрой, спокойной и удобной 💙
