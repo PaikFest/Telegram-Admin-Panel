@@ -64,14 +64,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/PaikFest/Telegram-Bot-Admin-
 
 ---
 
-## Установка (рекомендуемый сценарий)
-### 1. One-line install
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/PaikFest/Telegram-Bot-Admin-Panel/main/install.sh)
-```
-
-### 2. Вариант с явным репозиторием
-Если хотите принудительно указать репозиторий:
+## Альтернативный запуск с явным репозиторием
+Если хотите явно указать репозиторий:
 ```bash
 REPO_URL="https://github.com/PaikFest/Telegram-Bot-Admin-Panel.git" bash <(curl -fsSL https://raw.githubusercontent.com/PaikFest/Telegram-Bot-Admin-Panel/main/install.sh)
 ```
