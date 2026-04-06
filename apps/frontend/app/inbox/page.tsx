@@ -31,6 +31,13 @@ type ChatMessage = {
   text: string | null;
   caption: string | null;
   telegramFileId: string | null;
+  telegramMediaGroupId: string | null;
+  telegramMediaGroupOrder: number | null;
+  isMediaGroup?: boolean;
+  mediaGroupId?: string | null;
+  mediaGroupOrder?: number | null;
+  mediaGroupSize?: number | null;
+  mediaGroupCaption?: string | null;
   deliveryStatus: 'PENDING' | 'SENT' | 'FAILED';
   errorText: string | null;
   createdAt: string;
@@ -40,6 +47,16 @@ type AttachmentItem = {
   id: string;
   file: File;
   previewUrl: string;
+};
+
+type RenderGroup = {
+  groupId: string;
+  direction: 'INCOMING' | 'OUTGOING';
+  items: ChatMessage[];
+  caption: string | null;
+  createdAt: string;
+  deliveryStatus: 'PENDING' | 'SENT' | 'FAILED';
+  errorText: string | null;
 };
 
 function generateClientId(): string {
@@ -69,6 +86,8 @@ export default function InboxPage() {
   const [fetchingMessages, setFetchingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [lightboxImages, setLightboxImages] = useState<Array<{ src: string; alt: string }>>([]);
+  const [lightboxIndex, setLightboxIndex] = useState(0);
 
   const resetFileInput = () => {
     if (fileInputRef.current) {
@@ -187,6 +206,110 @@ export default function InboxPage() {
     () => conversations.find((item) => item.user.id === selectedUserId) ?? null,
     [conversations, selectedUserId],
   );
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setLightboxImages([]);
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, []);
+
+  const groupedMessageEntries = useMemo(() => {
+    const grouped = new Map<string, ChatMessage[]>();
+    for (const message of messages) {
+      const groupId = message.mediaGroupId ?? message.telegramMediaGroupId;
+      if (!groupId) {
+        continue;
+      }
+
+      const existing = grouped.get(groupId) ?? [];
+      existing.push(message);
+      grouped.set(groupId, existing);
+    }
+
+    const emitted = new Set<string>();
+    const entries: Array<{ type: 'single'; message: ChatMessage } | { type: 'group'; group: RenderGroup }> = [];
+
+    for (const message of messages) {
+      const groupId = message.mediaGroupId ?? message.telegramMediaGroupId;
+      if (!groupId) {
+        entries.push({ type: 'single', message });
+        continue;
+      }
+
+      if (emitted.has(groupId)) {
+        continue;
+      }
+
+      const groupItems = (grouped.get(groupId) ?? []).slice().sort((a, b) => {
+        const leftOrder = a.mediaGroupOrder ?? a.telegramMediaGroupOrder ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = b.mediaGroupOrder ?? b.telegramMediaGroupOrder ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+
+        const leftTime = new Date(a.createdAt).getTime();
+        const rightTime = new Date(b.createdAt).getTime();
+        if (leftTime !== rightTime) {
+          return leftTime - rightTime;
+        }
+
+        return a.id - b.id;
+      });
+
+      if (groupItems.length <= 1) {
+        entries.push({ type: 'single', message: groupItems[0] ?? message });
+        emitted.add(groupId);
+        continue;
+      }
+
+      emitted.add(groupId);
+
+      const finalStatus = groupItems.some((item) => item.deliveryStatus === 'FAILED')
+        ? 'FAILED'
+        : groupItems.some((item) => item.deliveryStatus === 'PENDING')
+          ? 'PENDING'
+          : 'SENT';
+
+      const finalError = groupItems.find((item) => item.errorText)?.errorText ?? null;
+      const caption =
+        groupItems.find((item) => typeof item.caption === 'string' && item.caption.trim().length > 0)?.caption ??
+        message.mediaGroupCaption ??
+        null;
+      const lastItem = groupItems[groupItems.length - 1];
+
+      entries.push({
+        type: 'group',
+        group: {
+          groupId,
+          direction: groupItems[0].direction,
+          items: groupItems,
+          caption,
+          createdAt: lastItem.createdAt,
+          deliveryStatus: finalStatus,
+          errorText: finalError,
+        },
+      });
+    }
+
+    return entries;
+  }, [messages]);
+
+  const openLightbox = (images: Array<{ src: string; alt: string }>, index = 0) => {
+    setLightboxImages(images);
+    setLightboxIndex(index);
+  };
+
+  const closeLightbox = () => {
+    setLightboxImages([]);
+    setLightboxIndex(0);
+  };
 
   const removeAttachment = (id: string) => {
     setAttachments((previous) => {
@@ -415,32 +538,92 @@ export default function InboxPage() {
               ) : messages.length === 0 ? (
                 <div className="empty-state">No message history yet.</div>
               ) : (
-                messages.map((message) => {
-                  const failed = message.deliveryStatus === 'FAILED';
+                groupedMessageEntries.map((entry) => {
+                  if (entry.type === 'single') {
+                    const message = entry.message;
+                    const failed = message.deliveryStatus === 'FAILED';
+                    return (
+                      <div
+                        key={message.id}
+                        className={`message-bubble ${message.direction === 'INCOMING' ? 'incoming' : 'outgoing'} ${failed ? 'failed' : ''}`}
+                      >
+                        {message.messageType === 'PHOTO' ? (
+                          <>
+                            {message.telegramFileId ? (
+                              <button
+                                type="button"
+                                className="message-media-trigger"
+                                onClick={() =>
+                                  openLightbox(
+                                    [{ src: withAdminBasePath(`/api/media/messages/${message.id}/file`), alt: 'message media' }],
+                                    0,
+                                  )
+                                }
+                              >
+                                <img
+                                  src={withAdminBasePath(`/api/media/messages/${message.id}/file`)}
+                                  alt="message media"
+                                  className="message-image"
+                                />
+                              </button>
+                            ) : (
+                              <div className="image-unavailable">Image unavailable</div>
+                            )}
+                            {message.caption ? <p className="message-caption">{message.caption}</p> : null}
+                          </>
+                        ) : (
+                          <p className="message-text">{message.text || '[non-text message]'}</p>
+                        )}
+                        <div className="message-meta">
+                          {formatDate(message.createdAt)} · {message.deliveryStatus}
+                          {message.errorText ? ` · ${message.errorText}` : ''}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  const { group } = entry;
+                  const failed = group.deliveryStatus === 'FAILED';
+                  const mediaItems = group.items.filter((item) => item.telegramFileId);
+                  const lightboxSet = mediaItems.map((item) => ({
+                    src: withAdminBasePath(`/api/media/messages/${item.id}/file`),
+                    alt: 'message media',
+                  }));
+                  const previewLimit = 6;
+                  const previewItems = mediaItems.slice(0, previewLimit);
+                  const hiddenCount = Math.max(0, mediaItems.length - previewLimit);
+
                   return (
                     <div
-                      key={message.id}
-                      className={`message-bubble ${message.direction === 'INCOMING' ? 'incoming' : 'outgoing'} ${failed ? 'failed' : ''}`}
+                      key={`group-${group.groupId}`}
+                      className={`message-bubble ${group.direction === 'INCOMING' ? 'incoming' : 'outgoing'} ${failed ? 'failed' : ''}`}
                     >
-                      {message.messageType === 'PHOTO' ? (
-                        <>
-                          {message.telegramFileId ? (
-                            <img
-                              src={withAdminBasePath(`/api/media/messages/${message.id}/file`)}
-                              alt="message media"
-                              className="message-image"
-                            />
-                          ) : (
-                            <div className="image-unavailable">Image unavailable</div>
-                          )}
-                          {message.caption ? <p className="message-caption">{message.caption}</p> : null}
-                        </>
+                      {previewItems.length > 0 ? (
+                        <div className={`album-grid count-${Math.min(previewItems.length, 6)}`}>
+                          {previewItems.map((item, index) => {
+                            const previewSrc = withAdminBasePath(`/api/media/messages/${item.id}/file`);
+                            return (
+                              <button
+                                type="button"
+                                key={item.id}
+                                className="album-tile"
+                                onClick={() => openLightbox(lightboxSet, index)}
+                              >
+                                <img src={previewSrc} alt="message media" className="album-image" />
+                                {index === previewItems.length - 1 && hiddenCount > 0 ? (
+                                  <span className="album-overlay">+{hiddenCount}</span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </div>
                       ) : (
-                        <p className="message-text">{message.text || '[non-text message]'}</p>
+                        <div className="image-unavailable">Image unavailable</div>
                       )}
+                      {group.caption ? <p className="message-caption">{group.caption}</p> : null}
                       <div className="message-meta">
-                        {formatDate(message.createdAt)} · {message.deliveryStatus}
-                        {message.errorText ? ` · ${message.errorText}` : ''}
+                        {formatDate(group.createdAt)} · {group.deliveryStatus}
+                        {group.errorText ? ` · ${group.errorText}` : ''}
                       </div>
                     </div>
                   );
@@ -514,6 +697,46 @@ export default function InboxPage() {
           </section>
         </section>
       </div>
+
+      {lightboxImages.length > 0 ? (
+        <div className="media-lightbox" onClick={closeLightbox}>
+          <button
+            type="button"
+            className="media-lightbox-close"
+            onClick={closeLightbox}
+          >
+            <Icon name="close" />
+          </button>
+          <button
+            type="button"
+            className="media-lightbox-nav"
+            onClick={(event) => {
+              event.stopPropagation();
+              setLightboxIndex((prev) => (prev - 1 + lightboxImages.length) % lightboxImages.length);
+            }}
+            disabled={lightboxImages.length < 2}
+          >
+            ‹
+          </button>
+          <img
+            src={lightboxImages[lightboxIndex]?.src}
+            alt={lightboxImages[lightboxIndex]?.alt ?? 'media preview'}
+            className="media-lightbox-image"
+            onClick={(event) => event.stopPropagation()}
+          />
+          <button
+            type="button"
+            className="media-lightbox-nav"
+            onClick={(event) => {
+              event.stopPropagation();
+              setLightboxIndex((prev) => (prev + 1) % lightboxImages.length);
+            }}
+            disabled={lightboxImages.length < 2}
+          >
+            ›
+          </button>
+        </div>
+      ) : null}
 
       {(error || success) && (
         <div className="toast-stack">

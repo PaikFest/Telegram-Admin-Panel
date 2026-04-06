@@ -114,7 +114,40 @@ export class InboxService {
       },
     });
 
-    return recentMessages.reverse();
+    const orderedMessages = recentMessages.reverse();
+    const groupStats = new Map<string, { size: number; caption: string | null }>();
+
+    for (const message of orderedMessages) {
+      if (!message.telegramMediaGroupId) {
+        continue;
+      }
+
+      const current = groupStats.get(message.telegramMediaGroupId) ?? {
+        size: 0,
+        caption: null,
+      };
+
+      current.size += 1;
+      if (!current.caption && typeof message.caption === 'string' && message.caption.trim().length > 0) {
+        current.caption = message.caption;
+      }
+
+      groupStats.set(message.telegramMediaGroupId, current);
+    }
+
+    return orderedMessages.map((message) => {
+      const mediaGroupId = message.telegramMediaGroupId;
+      const group = mediaGroupId ? groupStats.get(mediaGroupId) : null;
+
+      return {
+        ...message,
+        isMediaGroup: Boolean(mediaGroupId && group && group.size > 1),
+        mediaGroupId,
+        mediaGroupOrder: message.telegramMediaGroupOrder,
+        mediaGroupSize: group?.size ?? null,
+        mediaGroupCaption: group?.caption ?? null,
+      };
+    });
   }
 
   async sendReply(userId: number, text: string): Promise<{ success: boolean; outboxId: number }> {

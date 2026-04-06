@@ -313,6 +313,24 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const text = sanitizeOptionalPlainText(message.text ?? null);
       const caption = sanitizeOptionalPlainText(message.caption ?? null);
       const photo = this.pickLargestPhoto(message.photo);
+      const mediaGroupId = sanitizeOptionalPlainText(
+        (message as Message & { media_group_id?: string }).media_group_id ?? null,
+      );
+      const lastGroupMessage = mediaGroupId
+        ? await this.prisma.message.findFirst({
+            where: {
+              userId: user.id,
+              telegramMediaGroupId: mediaGroupId,
+            },
+            orderBy: [{ telegramMediaGroupOrder: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+            select: {
+              telegramMediaGroupOrder: true,
+            },
+          })
+        : null;
+      const mediaGroupOrder = mediaGroupId
+        ? (lastGroupMessage?.telegramMediaGroupOrder ?? -1) + 1
+        : null;
 
       await this.prisma.message.create({
         data: {
@@ -324,6 +342,8 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
           caption,
           telegramFileId: photo?.file_id ?? null,
           telegramFileUniqueId: photo?.file_unique_id ?? null,
+          telegramMediaGroupId: mediaGroupId,
+          telegramMediaGroupOrder: mediaGroupOrder,
           rawPayload: this.toJson(message),
           deliveryStatus: DeliveryStatus.SENT,
           isRead: false,

@@ -104,6 +104,8 @@ model Message {
   caption           String?
   telegramFileId    String?        @map("telegram_file_id") @db.VarChar(255)
   telegramFileUniqueId String?     @map("telegram_file_unique_id") @db.VarChar(255)
+  telegramMediaGroupId String?     @map("telegram_media_group_id") @db.VarChar(128)
+  telegramMediaGroupOrder Int?     @map("telegram_media_group_order")
   rawPayload        Json           @map("raw_payload")
   deliveryStatus    DeliveryStatus @default(PENDING) @map("delivery_status")
   errorText         String?        @map("error_text")
@@ -114,6 +116,7 @@ model Message {
 
   @@index([userId, createdAt])
   @@index([direction, isRead])
+  @@index([userId, telegramMediaGroupId, createdAt])
   @@map("messages")
 }
 

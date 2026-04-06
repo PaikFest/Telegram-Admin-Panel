@@ -582,6 +582,9 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         const albumJob = albumJobs[index];
         const sentMessage = telegramMessages[index];
         const photoIds = this.extractPhotoIds(sentMessage.rawPayload);
+        const telegramMediaGroupId =
+          this.extractMediaGroupId(sentMessage.rawPayload) ?? albumJob.mediaGroupId;
+        const telegramMediaGroupOrder = albumJob.mediaGroupOrder ?? index;
 
         await tx.outbox.update({
           where: { id: albumJob.id },
@@ -603,6 +606,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             caption: albumJob.caption,
             telegramFileId: photoIds.fileId,
             telegramFileUniqueId: photoIds.fileUniqueId,
+            telegramMediaGroupId,
+            telegramMediaGroupOrder,
             rawPayload: sentMessage.rawPayload,
             deliveryStatus: DeliveryStatus.SENT,
             isRead: true,
@@ -761,6 +766,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             caption: albumJob.caption,
             telegramFileId: null,
             telegramFileUniqueId: null,
+            telegramMediaGroupId: albumJob.mediaGroupId,
+            telegramMediaGroupOrder: albumJob.mediaGroupOrder,
             rawPayload: this.toJson({ error: errorText }),
             deliveryStatus: DeliveryStatus.FAILED,
             errorText,
@@ -991,6 +998,17 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       fileId: largest?.file_id ?? null,
       fileUniqueId: largest?.file_unique_id ?? null,
     };
+  }
+
+  private extractMediaGroupId(rawPayload: Prisma.InputJsonValue): string | null {
+    if (!rawPayload || typeof rawPayload !== 'object' || Array.isArray(rawPayload)) {
+      return null;
+    }
+
+    const payload = rawPayload as { media_group_id?: string };
+    return typeof payload.media_group_id === 'string' && payload.media_group_id.trim().length > 0
+      ? payload.media_group_id
+      : null;
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {
