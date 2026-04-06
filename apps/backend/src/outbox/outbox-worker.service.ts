@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
+import { isPathInsideUploadsDir } from '../common/upload-security.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TelegramService } from '../telegram/telegram.service';
@@ -251,7 +252,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
     let sendResult;
     if (job.message_type === MessageType.PHOTO) {
-      if (!job.file_path || !existsSync(job.file_path)) {
+      if (!job.file_path || !isPathInsideUploadsDir(job.file_path) || !existsSync(job.file_path)) {
         await this.failJob(job, 'Photo file is missing on disk');
         return;
       }
@@ -280,7 +281,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       await this.sleep((retryAfterSeconds + 1) * 1000);
       rateLimitRetries += 1;
       if (job.message_type === MessageType.PHOTO) {
-        if (!job.file_path || !existsSync(job.file_path)) {
+        if (!job.file_path || !isPathInsideUploadsDir(job.file_path) || !existsSync(job.file_path)) {
           await this.failJob(job, 'Photo file is missing on disk');
           return;
         }
@@ -400,7 +401,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
 
     const filePaths: string[] = [];
     for (const albumJob of albumJobs) {
-      if (!albumJob.filePath || !existsSync(albumJob.filePath)) {
+      if (
+        !albumJob.filePath ||
+        !isPathInsideUploadsDir(albumJob.filePath) ||
+        !existsSync(albumJob.filePath)
+      ) {
         await this.failMediaGroupJobs(albumJobs, 'Photo file is missing on disk');
         return;
       }
@@ -1029,6 +1034,16 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     reason: 'sent' | 'failed' | 'stale-failed',
   ): Promise<void> {
     if (messageType !== MessageType.PHOTO || !filePath) {
+      return;
+    }
+    if (!isPathInsideUploadsDir(filePath)) {
+      await this.logsService.warn(
+        'outbox-worker',
+        `Skipped unsafe file cleanup for outboxId=${outboxId} reason=${reason}`,
+        {
+          filePath,
+        } as Prisma.InputJsonValue,
+      );
       return;
     }
 

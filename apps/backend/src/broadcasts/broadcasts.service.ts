@@ -3,6 +3,7 @@ import { Broadcast, BroadcastStatus, Prisma } from '@prisma/client';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
+import { isPathInsideUploadsDir, validateStagedImageFile } from '../common/upload-security.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBroadcastMediaDto } from './dto/create-broadcast-media.dto';
@@ -81,6 +82,30 @@ export class BroadcastsService {
     if (!text && files.length === 0) {
       throw new BadRequestException('Provide broadcast text and/or at least one image');
     }
+    if (files.length > 10) {
+      await this.cleanupStagedFiles(files);
+      throw new BadRequestException('No more than 10 images can be attached');
+    }
+
+    const validatedFiles: Array<{
+      path: string;
+      mimetype: string;
+      originalname: string;
+    }> = [];
+
+    for (const file of files) {
+      const validation = await validateStagedImageFile(file.path, file.mimetype);
+      if (!validation.valid || !validation.detectedMimeType) {
+        await this.cleanupStagedFiles(files);
+        throw new BadRequestException(validation.reason ?? 'Invalid image attachment');
+      }
+
+      validatedFiles.push({
+        path: file.path,
+        mimetype: validation.detectedMimeType,
+        originalname: file.originalname,
+      });
+    }
 
     let result: {
       created: Broadcast;
@@ -93,8 +118,8 @@ export class BroadcastsService {
           where: { isBlocked: false },
         });
 
-        const jobsPerUser = files.length > 0 ? files.length : (text ? 1 : 0);
-        const useMediaGroup = files.length > 1;
+        const jobsPerUser = validatedFiles.length > 0 ? validatedFiles.length : (text ? 1 : 0);
+        const useMediaGroup = validatedFiles.length > 1;
         const totalTargets = activeUsers * jobsPerUser;
 
         const created = await tx.broadcast.create({
@@ -123,8 +148,8 @@ export class BroadcastsService {
             `;
           }
 
-          for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
-            const file = files[fileIndex];
+          for (let fileIndex = 0; fileIndex < validatedFiles.length; fileIndex += 1) {
+            const file = validatedFiles[fileIndex];
             await tx.$executeRaw`
               WITH inserted_outbox AS (
                 INSERT INTO "outbox" (
@@ -178,14 +203,14 @@ export class BroadcastsService {
       });
 
     } catch (error) {
-      await this.cleanupStagedFiles(files);
+      await this.cleanupStagedFiles(validatedFiles);
       throw error;
     }
 
     const broadcast = result.created;
 
-    if (!result.hasQueuedJobs && files.length > 0) {
-      await this.cleanupStagedFiles(files);
+    if (!result.hasQueuedJobs && validatedFiles.length > 0) {
+      await this.cleanupStagedFiles(validatedFiles);
     }
 
     try {
@@ -195,7 +220,7 @@ export class BroadcastsService {
         {
           totalTargets: broadcast.totalTargets,
           hasText: Boolean(text),
-          mediaCount: files.length,
+          mediaCount: validatedFiles.length,
         } as Prisma.InputJsonValue,
       );
     } catch {
@@ -254,7 +279,7 @@ export class BroadcastsService {
   ): Promise<void> {
     for (const file of files) {
       try {
-        if (!file.path || !existsSync(file.path)) {
+        if (!file.path || !isPathInsideUploadsDir(file.path) || !existsSync(file.path)) {
           continue;
         }
         await unlink(file.path);

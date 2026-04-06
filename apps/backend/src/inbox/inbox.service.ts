@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
+import { isPathInsideUploadsDir, validateStagedImageFile } from '../common/upload-security.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -205,6 +206,29 @@ export class InboxService {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('At least one image file is required');
     }
+    if (files.length > 10) {
+      await this.cleanupStagedFiles(files);
+      throw new BadRequestException('No more than 10 images can be attached');
+    }
+
+    const validatedFiles: Array<{
+      path: string;
+      mimetype: string;
+      originalname: string;
+    }> = [];
+    for (const file of files) {
+      const validation = await validateStagedImageFile(file.path, file.mimetype);
+      if (!validation.valid || !validation.detectedMimeType) {
+        await this.cleanupStagedFiles(files);
+        throw new BadRequestException(validation.reason ?? 'Invalid image attachment');
+      }
+
+      validatedFiles.push({
+        path: file.path,
+        mimetype: validation.detectedMimeType,
+        originalname: file.originalname,
+      });
+    }
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -212,19 +236,19 @@ export class InboxService {
     });
 
     if (!user) {
-      await this.cleanupStagedFiles(files);
+      await this.cleanupStagedFiles(validatedFiles);
       throw new NotFoundException('User not found');
     }
 
     const normalizedText = sanitizeOptionalPlainText(text);
     let jobs: number[];
-    const mediaGroupId = files.length > 1 ? randomUUID() : null;
+    const mediaGroupId = validatedFiles.length > 1 ? randomUUID() : null;
     try {
       jobs = await this.prisma.$transaction(async (tx) => {
         const created: number[] = [];
 
-        for (let index = 0; index < files.length; index += 1) {
-          const file = files[index];
+        for (let index = 0; index < validatedFiles.length; index += 1) {
+          const file = validatedFiles[index];
           const job = await tx.outbox.create({
             data: {
               userId,
@@ -248,14 +272,14 @@ export class InboxService {
         return created;
       });
     } catch (error) {
-      await this.cleanupStagedFiles(files);
+      await this.cleanupStagedFiles(validatedFiles);
       throw error;
     }
 
     try {
       await this.logsService.info(
         'outbox',
-        `Photo reply queued for userId=${userId}, files=${files.length}`,
+        `Photo reply queued for userId=${userId}, files=${validatedFiles.length}`,
         {
           outboxIds: jobs,
         } as Prisma.InputJsonValue,
@@ -297,7 +321,7 @@ export class InboxService {
   ): Promise<void> {
     for (const file of files) {
       try {
-        if (!file.path || !existsSync(file.path)) {
+        if (!file.path || !isPathInsideUploadsDir(file.path) || !existsSync(file.path)) {
           continue;
         }
         await unlink(file.path);

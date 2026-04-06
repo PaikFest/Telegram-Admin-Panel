@@ -9,6 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
+import { sanitizeOptionalPlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { TelegramService } from '../telegram/telegram.service';
 import { AuthService } from './auth.service';
@@ -29,22 +30,29 @@ export class AuthController {
   async login(@Body() dto: LoginDto, @Req() req: Request): Promise<{ login: string }> {
     try {
       const admin = await this.authService.validateAdmin(dto.login, dto.password);
-      req.session.adminId = admin.id;
 
       await new Promise<void>((resolve, reject) => {
-        req.session.save((error) => {
+        req.session.regenerate((error) => {
           if (error) {
             reject(error);
             return;
           }
-          resolve();
+          req.session.adminId = admin.id;
+          req.session.save((saveError) => {
+            if (saveError) {
+              reject(saveError);
+              return;
+            }
+            resolve();
+          });
         });
       });
 
       await this.logsService.info('auth', `Login success: ${admin.login}`);
       return { login: admin.login };
     } catch (error) {
-      await this.logsService.warn('auth', `Login failed for login=${dto.login}`);
+      const loginForLog = sanitizeOptionalPlainText(dto.login) ?? 'unknown';
+      await this.logsService.warn('auth', `Login failed for login=${loginForLog}`);
       throw error;
     }
   }
@@ -59,6 +67,7 @@ export class AuthController {
           reject(error);
           return;
         }
+        req.res?.clearCookie('opener.sid');
         resolve();
       });
     });

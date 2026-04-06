@@ -25,6 +25,7 @@ export class MediaController {
     response.setHeader('Content-Type', file.mimeType);
     response.setHeader('Content-Disposition', `inline; filename="${file.fileName}"`);
     response.setHeader('Cache-Control', 'private, max-age=60');
+    response.setHeader('X-Content-Type-Options', 'nosniff');
     return new StreamableFile(file.buffer);
   }
 }

@@ -14,14 +14,14 @@ import {
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
 import { mkdirSync } from 'node:fs';
-import { extname, resolve } from 'node:path';
+import { extname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { diskStorage } from 'multer';
 import { AuthenticatedGuard } from '../auth/guards/authenticated.guard';
+import { UPLOADS_DIR } from '../common/upload-security.util';
 import { ReplyDto } from './dto/reply.dto';
 import { InboxService } from './inbox.service';
 
-const UPLOADS_DIR = resolve(process.cwd(), 'storage', 'uploads');
 mkdirSync(UPLOADS_DIR, { recursive: true });
 
 const imageUploadInterceptor = FilesInterceptor('files', 10, {

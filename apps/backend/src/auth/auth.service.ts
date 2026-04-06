@@ -13,6 +13,10 @@ import { ChangeCredentialsDto } from './dto/change-credentials.dto';
 
 @Injectable()
 export class AuthService implements OnModuleInit {
+  // bcrypt hash for constant-time compare on missing admin accounts.
+  private readonly dummyPasswordHash =
+    '$2a$12$wCCf7II9NfQ4xVTe6xCG2u6D4S7AYTi0gLPf6PjL8vLxLbj5woVgW'; // password: invalid_dummy_password
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -56,6 +60,7 @@ export class AuthService implements OnModuleInit {
     });
 
     if (!admin) {
+      await bcrypt.compare(password, this.dummyPasswordHash);
       throw new UnauthorizedException('Invalid credentials');
     }
 
