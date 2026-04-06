@@ -130,7 +130,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         if (!active) return;
 
         const normalized = typeof me.botDisplayName === 'string' ? me.botDisplayName.trim() : '';
-        setBotDisplayName(normalized.length > 0 ? normalized : 'Telegram Bot Admin Panel');
+        const withoutUsernameSuffix = normalized.replace(/\s*\(@[^)]+\)\s*$/, '').trim();
+        setBotDisplayName(withoutUsernameSuffix.length > 0 ? withoutUsernameSuffix : 'Telegram Bot Admin Panel');
       } catch {
         if (!active) return;
         setBotDisplayName('Telegram Bot Admin Panel');

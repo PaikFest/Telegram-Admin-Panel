@@ -93,7 +93,8 @@ export class BroadcastsService {
           where: { isBlocked: false },
         });
 
-        const jobsPerUser = (text ? 1 : 0) + files.length;
+        const jobsPerUser = files.length > 0 ? files.length : (text ? 1 : 0);
+        const useMediaGroup = files.length > 1;
         const totalTargets = activeUsers * jobsPerUser;
 
         const created = await tx.broadcast.create({
@@ -107,7 +108,7 @@ export class BroadcastsService {
         });
 
         if (activeUsers > 0 && jobsPerUser > 0) {
-          if (text) {
+          if (text && files.length === 0) {
             await tx.$executeRaw`
               WITH inserted_outbox AS (
                 INSERT INTO "outbox" ("user_id", "source_type", "message_type", "text", "status", "attempts", "created_at")
@@ -122,7 +123,8 @@ export class BroadcastsService {
             `;
           }
 
-          for (const file of files) {
+          for (let fileIndex = 0; fileIndex < files.length; fileIndex += 1) {
+            const file = files[fileIndex];
             await tx.$executeRaw`
               WITH inserted_outbox AS (
                 INSERT INTO "outbox" (
@@ -134,6 +136,8 @@ export class BroadcastsService {
                   "file_path",
                   "mime_type",
                   "original_file_name",
+                  "media_group_id",
+                  "media_group_order",
                   "status",
                   "attempts",
                   "created_at"
@@ -143,10 +147,16 @@ export class BroadcastsService {
                   'BROADCAST'::"OutboxSourceType",
                   'PHOTO'::"MessageType",
                   NULL,
-                  NULL,
+                  ${fileIndex === 0 ? text : null},
                   ${file.path},
                   ${sanitizeOptionalPlainText(file.mimetype)},
                   ${sanitizeOptionalPlainText(file.originalname)},
+                  ${
+                    useMediaGroup
+                      ? Prisma.sql`('broadcast-' || ${created.id} || '-user-' || "id")`
+                      : Prisma.sql`NULL`
+                  },
+                  ${useMediaGroup ? Prisma.sql`${fileIndex}` : Prisma.sql`NULL`},
                   'PENDING'::"OutboxStatus",
                   0,
                   NOW()

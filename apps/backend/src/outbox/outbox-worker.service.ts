@@ -225,12 +225,8 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async processJob(job: ClaimedOutboxRow): Promise<void> {
-    if (
-      job.source_type === 'REPLY' &&
-      job.message_type === MessageType.PHOTO &&
-      job.media_group_id
-    ) {
-      await this.processInboxMediaGroupJob(job);
+    if (job.message_type === MessageType.PHOTO && job.media_group_id) {
+      await this.processMediaGroupJob(job);
       return;
     }
 
@@ -315,7 +311,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     await this.failJob(job, sendResult.errorText);
   }
 
-  private async processInboxMediaGroupJob(job: ClaimedOutboxRow): Promise<void> {
+  private async processMediaGroupJob(job: ClaimedOutboxRow): Promise<void> {
     const mediaGroupId = job.media_group_id;
     if (!mediaGroupId) {
       return;
@@ -324,7 +320,6 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     const groupWindow = await this.prisma.outbox.findMany({
       where: {
         mediaGroupId,
-        sourceType: 'REPLY',
         messageType: MessageType.PHOTO,
         status: {
           in: [OutboxStatus.PENDING, OutboxStatus.PROCESSING],
@@ -349,7 +344,6 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     const albumJobs = await this.prisma.outbox.findMany({
       where: {
         mediaGroupId,
-        sourceType: 'REPLY',
         messageType: MessageType.PHOTO,
         status: OutboxStatus.PROCESSING,
       },
@@ -377,6 +371,11 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     const userId = albumJobs[0].userId;
     if (!albumJobs.every((item) => item.userId === userId)) {
       await this.failMediaGroupJobs(albumJobs, 'Media group has inconsistent user mapping');
+      return;
+    }
+    const sourceType = albumJobs[0].sourceType;
+    if (!albumJobs.every((item) => item.sourceType === sourceType)) {
+      await this.failMediaGroupJobs(albumJobs, 'Media group has inconsistent source mapping');
       return;
     }
 
@@ -408,7 +407,9 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       filePaths.push(albumJob.filePath);
     }
 
-    let sendResult = await this.telegramService.sendMediaGroup(user.telegramId, filePaths);
+    const mediaGroupCaption =
+      albumJobs.find((item) => (item.caption ?? '').trim().length > 0)?.caption ?? null;
+    let sendResult = await this.telegramService.sendMediaGroup(user.telegramId, filePaths, mediaGroupCaption);
 
     let rateLimitRetries = 0;
     while (
@@ -423,7 +424,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       );
       await this.sleep((retryAfterSeconds + 1) * 1000);
       rateLimitRetries += 1;
-      sendResult = await this.telegramService.sendMediaGroup(user.telegramId, filePaths);
+      sendResult = await this.telegramService.sendMediaGroup(user.telegramId, filePaths, mediaGroupCaption);
     }
 
     if (sendResult.success) {
@@ -544,7 +545,6 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
           "attempts" = "attempts" + 1,
           "error_text" = NULL
       WHERE "media_group_id" = ${mediaGroupId}
-        AND "source_type" = 'REPLY'
         AND "message_type" = 'PHOTO'
         AND "status" = 'PENDING';
     `;
@@ -576,6 +576,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
+    const broadcastIds = new Set<number>();
     await this.prisma.$transaction(async (tx) => {
       for (let index = 0; index < albumJobs.length; index += 1) {
         const albumJob = albumJobs[index];
@@ -599,7 +600,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             direction: Direction.OUTGOING,
             messageType: MessageType.PHOTO,
             text: null,
-            caption: null,
+            caption: albumJob.caption,
             telegramFileId: photoIds.fileId,
             telegramFileUniqueId: photoIds.fileUniqueId,
             rawPayload: sentMessage.rawPayload,
@@ -607,6 +608,22 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             isRead: true,
           },
         });
+
+        const delivery = await tx.broadcastDelivery.findUnique({
+          where: { outboxId: albumJob.id },
+          select: { broadcastId: true },
+        });
+
+        if (delivery) {
+          broadcastIds.add(delivery.broadcastId);
+          await tx.broadcastDelivery.update({
+            where: { outboxId: albumJob.id },
+            data: {
+              status: BroadcastDeliveryStatus.SENT,
+              errorText: null,
+            },
+          });
+        }
       }
     });
 
@@ -618,6 +635,10 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         albumJob.filePath,
         'sent',
       );
+    }
+
+    for (const broadcastId of broadcastIds) {
+      await this.refreshBroadcastStats(broadcastId);
     }
 
     try {
@@ -642,18 +663,51 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    await this.prisma.outbox.updateMany({
-      where: {
-        id: {
-          in: ids,
+    const broadcastIds = await this.prisma.$transaction(async (tx) => {
+      await tx.outbox.updateMany({
+        where: {
+          id: {
+            in: ids,
+          },
         },
-      },
-      data: {
-        status: OutboxStatus.PENDING,
-        processingStartedAt: null,
-        errorText,
-      },
+        data: {
+          status: OutboxStatus.PENDING,
+          processingStartedAt: null,
+          errorText,
+        },
+      });
+
+      const deliveries = await tx.broadcastDelivery.findMany({
+        where: {
+          outboxId: {
+            in: ids,
+          },
+        },
+        select: {
+          outboxId: true,
+          broadcastId: true,
+        },
+      });
+
+      for (const delivery of deliveries) {
+        if (delivery.outboxId === null) {
+          continue;
+        }
+        await tx.broadcastDelivery.update({
+          where: { outboxId: delivery.outboxId },
+          data: {
+            status: BroadcastDeliveryStatus.PENDING,
+            errorText: null,
+          },
+        });
+      }
+
+      return Array.from(new Set(deliveries.map((item) => item.broadcastId)));
     });
+
+    for (const broadcastId of broadcastIds) {
+      await this.refreshBroadcastStats(broadcastId);
+    }
   }
 
   private async failMediaGroupJobs(
@@ -681,6 +735,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
     const shouldMarkBlocked = this.shouldMarkBlocked(errorText);
     const userId = albumJobs[0].userId;
 
+    const broadcastIds = new Set<number>();
     await this.prisma.$transaction(async (tx) => {
       await tx.outbox.updateMany({
         where: {
@@ -703,7 +758,7 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             direction: Direction.OUTGOING,
             messageType: MessageType.PHOTO,
             text: null,
-            caption: null,
+            caption: albumJob.caption,
             telegramFileId: null,
             telegramFileUniqueId: null,
             rawPayload: this.toJson({ error: errorText }),
@@ -712,6 +767,22 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
             isRead: true,
           },
         });
+
+        const delivery = await tx.broadcastDelivery.findUnique({
+          where: { outboxId: albumJob.id },
+          select: { broadcastId: true },
+        });
+
+        if (delivery) {
+          broadcastIds.add(delivery.broadcastId);
+          await tx.broadcastDelivery.update({
+            where: { outboxId: albumJob.id },
+            data: {
+              status: BroadcastDeliveryStatus.FAILED,
+              errorText,
+            },
+          });
+        }
       }
 
       if (shouldMarkBlocked) {
@@ -730,6 +801,10 @@ export class OutboxWorkerService implements OnModuleInit, OnModuleDestroy {
         albumJob.filePath,
         'failed',
       );
+    }
+
+    for (const broadcastId of broadcastIds) {
+      await this.refreshBroadcastStats(broadcastId);
     }
   }
 

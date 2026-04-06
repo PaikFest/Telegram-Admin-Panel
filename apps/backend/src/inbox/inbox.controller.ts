@@ -86,9 +86,10 @@ export class InboxController {
   @UseInterceptors(imageUploadInterceptor)
   async sendReplyMedia(
     @Param('userId', ParseIntPipe) userId: number,
+    @Body('text') text: string | undefined,
     @UploadedFiles()
     files: Array<{ path: string; mimetype: string; originalname: string }> | undefined,
   ) {
-    return this.inboxService.sendReplyMedia(userId, files ?? []);
+    return this.inboxService.sendReplyMedia(userId, files ?? [], text);
   }
 }

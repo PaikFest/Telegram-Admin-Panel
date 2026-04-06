@@ -155,6 +155,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
   async sendMediaGroup(
     telegramId: string,
     filePaths: string[],
+    caption?: string | null,
   ): Promise<TelegramSendMediaGroupResult> {
     if (!this.bot) {
       return {
@@ -175,9 +176,11 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const media = filePaths.map((filePath) => ({
+      const normalizedCaption = sanitizeOptionalPlainText(caption ?? null);
+      const media = filePaths.map((filePath, index) => ({
         type: 'photo' as const,
         media: createReadStream(filePath) as unknown as string,
+        caption: index === 0 && normalizedCaption ? normalizedCaption : undefined,
       }));
 
       const sentMessages = await this.bot.sendMediaGroup(telegramId, media);
@@ -346,12 +349,7 @@ export class TelegramService implements OnModuleInit, OnModuleDestroy {
       const firstName = sanitizeOptionalPlainText(me.first_name);
       const username = sanitizeOptionalPlainText(me.username);
 
-      if (firstName && username) {
-        this.botDisplayName = `${firstName} (@${username.replace(/^@+/, '')})`;
-        return;
-      }
-
-      this.botDisplayName = firstName ?? (username ? `@${username.replace(/^@+/, '')}` : null);
+      this.botDisplayName = firstName ?? (username ? username.replace(/^@+/, '') : null);
     } catch (error) {
       this.botDisplayName = null;
       await this.logsService.warn(

@@ -7,7 +7,7 @@ import { Direction, MessageType, OutboxSourceType, Prisma } from '@prisma/client
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { sanitizePlainText } from '../common/sanitize.util';
+import { sanitizeOptionalPlainText, sanitizePlainText } from '../common/sanitize.util';
 import { LogsService } from '../logs/logs.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -167,6 +167,7 @@ export class InboxService {
       mimetype: string;
       originalname: string;
     }>,
+    text?: string,
   ): Promise<{ success: boolean; outboxIds: number[] }> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new BadRequestException('At least one image file is required');
@@ -182,6 +183,7 @@ export class InboxService {
       throw new NotFoundException('User not found');
     }
 
+    const normalizedText = sanitizeOptionalPlainText(text);
     let jobs: number[];
     const mediaGroupId = files.length > 1 ? randomUUID() : null;
     try {
@@ -196,7 +198,7 @@ export class InboxService {
               sourceType: OutboxSourceType.REPLY,
               messageType: MessageType.PHOTO,
               text: null,
-              caption: null,
+              caption: index === 0 ? normalizedText : null,
               filePath: file.path,
               mimeType: file.mimetype?.trim() || null,
               originalFileName: file.originalname?.trim() || null,

@@ -256,22 +256,11 @@ export default function InboxPage() {
     setSuccess(null);
 
     try {
-      if (hasText) {
-        const result = await apiFetch<{ success: true; outboxId: number }>(
-          `/api/inbox/conversations/${selectedUserId}/reply`,
-          {
-            method: 'POST',
-            body: JSON.stringify({ text: sanitizedText }),
-          },
-        );
-
-        if (typeof result.outboxId !== 'number') {
-          throw new Error('Failed to queue reply');
-        }
-      }
-
       if (hasAttachments) {
         const formData = new FormData();
+        if (hasText) {
+          formData.append('text', sanitizedText);
+        }
         for (const attachment of attachments) {
           formData.append('files', attachment.file);
         }
@@ -296,6 +285,18 @@ export default function InboxPage() {
           }
           throw new Error(errorMessage);
         }
+      } else if (hasText) {
+        const result = await apiFetch<{ success: true; outboxId: number }>(
+          `/api/inbox/conversations/${selectedUserId}/reply`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ text: sanitizedText }),
+          },
+        );
+
+        if (typeof result.outboxId !== 'number') {
+          throw new Error('Failed to queue reply');
+        }
       }
 
       clearAttachments();
@@ -316,7 +317,7 @@ export default function InboxPage() {
 
   return (
     <AppShell>
-      <div className="workspace">
+      <div className="workspace inbox-workspace">
         <section className="panel inbox-grid">
           <aside className="inbox-left">
             <div className="inbox-left-head">
